@@ -735,6 +735,21 @@ def save_processed_urls(urls, filepath="processed_urls.json"):
     with open(filepath, "w") as f:
         json.dump(list(urls), f)
 
+def load_processed_skus(filepath="processed_skus.json"):
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+def save_processed_skus(skus, filepath="processed_skus.json"):
+    with open(filepath, "w") as f:
+        json.dump(list(skus), f)
+
+PROCESSED_SKUS = load_processed_skus()
+
 def get_todays_archive_url():
     now = datetime.now()
     date_str = now.strftime("%Y_%m_%d")
@@ -767,28 +782,8 @@ def classify_and_process_url(blogger_service, url):
         labels = response.get('labels', [])
         raw_html = response.get('content', '')
         
-        is_consignment = any('CONSIGNMENT' in label.upper() for label in labels)
-        is_featured = any('FEATURED' in label.upper() for label in labels)
-        
-        if is_consignment or is_featured:
-            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (ditemukan label Consignment/Featured)")
-            process_photo_studio(blogger_service, [url])
-            return True
-            
+        # Ekstrak SKU terlebih dahulu untuk pengecekan duplikat
         soup = BeautifulSoup(raw_html, 'html.parser')
-        
-        raw_image_urls = []
-        for img in soup.find_all('img'):
-            if 'src' in img.attrs:
-                img_url = img['src']
-                parent_a = img.find_parent('a')
-                if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
-                    img_url = parent_a['href']
-                high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
-                if high_res_url not in raw_image_urls:
-                    raw_image_urls.append(high_res_url)
-                    
-        image_count = len(raw_image_urls)
         
         for br in soup.find_all("br"): br.replace_with("\n")
         for tag in soup.find_all(['div', 'p', 'li', 'ul', 'h1', 'h2', 'h3']):
@@ -803,19 +798,50 @@ def classify_and_process_url(blogger_service, url):
         if sku_match:
             sku = sku_match.group(1).upper()
             
+        if sku and sku in PROCESSED_SKUS:
+            print(f"⏭️ {url} dilewati karena SKU '{sku}' sudah terupload di sesi ini.")
+            return True # Dianggap sukses agar link masuk processed_urls
+        
+        is_consignment = any('CONSIGNMENT' in label.upper() for label in labels)
+        is_featured = any('FEATURED' in label.upper() for label in labels)
+        
+        if is_consignment or is_featured:
+            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (ditemukan label Consignment/Featured)")
+            process_photo_studio(blogger_service, [url])
+            if sku:
+                PROCESSED_SKUS.add(sku)
+                save_processed_skus(PROCESSED_SKUS)
+            return True
+            
+        raw_image_urls = []
+        for img in soup.find_all('img'):
+            if 'src' in img.attrs:
+                img_url = img['src']
+                parent_a = img.find_parent('a')
+                if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
+                    img_url = parent_a['href']
+                high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
+                if high_res_url not in raw_image_urls:
+                    raw_image_urls.append(high_res_url)
+                    
+        image_count = len(raw_image_urls)
+        
         if sku.startswith("CPO"):
             if image_count == 1:
                 print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (SKU {sku}, {image_count} Gambar)")
                 process_notsync(blogger_service, [url])
-                return True
             else:
                 print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (SKU {sku}, {image_count} Gambar)")
                 process_photo_owner(blogger_service, [url])
-                return True
         else:
             print(f"⚠️ {url} tidak dapat diklasifikasikan otomatis (SKU '{sku}', bukan awalan CPO). Akan diproses default sebagai PHOTO STUDIO.")
             process_photo_studio(blogger_service, [url])
-            return True
+            
+        if sku:
+            PROCESSED_SKUS.add(sku)
+            save_processed_skus(PROCESSED_SKUS)
+            
+        return True
             
     except Exception as e:
         print(f"❌ Gagal mengklasifikasikan atau memproses {url}: {e}")
