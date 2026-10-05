@@ -52,6 +52,10 @@ DAFTAR_URL_NOTSYNC = [
     # "https://www.dualtime.id/2026/10/for-sale-cartier-panthere-m-silver-dial.html",
 ]
 
+DAFTAR_URL_TWP = [
+    # "https://www.dualtime.id/2026/10/for-sale-rolex-datejust-twp.html",
+]
+
 DAFTAR_URL_STUDIO = [
     # "https://www.dualtime.id/2026/10/for-sale-rolex-datejust-31mm-twotone.html",
 ]
@@ -256,7 +260,10 @@ def process_notsync(blogger_service, urls):
                 if re.search(r'^(Price|Code|Last Post|Order Received|Form|Notes):', line, re.IGNORECASE): break
                 desc_lines.append(line)
             if desc_lines: desc_lines[0] = f"<strong>{desc_lines[0]}</strong>"
-            final_description_html = "<p>" + "<br>".join(desc_lines) + "</p>"
+            if len(desc_lines) > 1:
+                final_description_html = f"<p>{desc_lines[0]}</p><p>" + "<br>".join(desc_lines[1:]) + "</p>"
+            else:
+                final_description_html = f"<p>{desc_lines[0] if desc_lines else ''}</p>"
 
             # --- DETEKSI MEREK, PAGE TITLE, URL HANDLE & DISPLAY TITLE ---
             vendor = "Unknown"
@@ -324,6 +331,170 @@ def process_notsync(blogger_service, urls):
         time.sleep(1)
     
     print("✅ SEMUA PROSES (NOTSYNC) SELESAI!")
+
+
+# ==========================================
+# FUNGSI PROSES UNTUK TWP
+# ==========================================
+def process_twp(blogger_service, urls):
+    if not urls:
+        return
+        
+    print(f"\nMemulai proses pemindahan data untuk {len(urls)} item (Format TWP)...")
+    for idx, url in enumerate(urls, 1):
+        print(f"\n[{idx}/{len(urls)}] Memproses: {url}")
+        try:
+            parsed_url = urlparse(url)
+            post_path = parsed_url.path
+
+            request = blogger_service.posts().getByPath(blogId=BLOG_ID, path=post_path)
+            response = request.execute()
+
+            raw_title = response.get('title', '')
+            raw_html = response.get('content', '')
+
+            # --- EKSTRAKSI JUDUL ---
+            clean_title = re.sub(r'\[FOR SALE\]\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            if not clean_title: continue
+
+            soup = BeautifulSoup(raw_html, 'html.parser')
+
+            # --- EKSTRAKSI GAMBAR ---
+            raw_image_urls = []
+            image_urls = []
+            potongan_kata = clean_title.split()[:3]
+            alt_text_rapi = " ".join(potongan_kata).title()
+            nama_file_dasar = alt_text_rapi.replace(" ", "-")
+
+            for img in soup.find_all('img'):
+                if 'src' in img.attrs:
+                    img_url = img['src']
+                    parent_a = img.find_parent('a')
+                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
+                        img_url = parent_a['href']
+                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
+                    if high_res_url not in raw_image_urls: raw_image_urls.append(high_res_url)
+
+            for i, img_url in enumerate(raw_image_urls):
+                try:
+                    img_res = requests.get(img_url, timeout=10)
+                    if img_res.status_code == 200:
+                        image_urls.append({
+                            "attachment": base64.b64encode(img_res.content).decode('utf-8'),
+                            "filename": f"{nama_file_dasar}-{i+1}.jpg",
+                            "alt": alt_text_rapi
+                        })
+                except Exception: pass
+
+            # --- EKSTRAKSI TEKS ---
+            for br in soup.find_all("br"): br.replace_with("\n")
+            for tag in soup.find_all(['div', 'p', 'li', 'ul', 'h1', 'h2', 'h3']):
+                tag.insert_before("\n")
+                tag.insert_after("\n")
+
+            clean_lines = [re.sub(r'\s+', ' ', line.strip()) for line in soup.get_text().split('\n') if re.sub(r'\s+', ' ', line.strip())]
+            body_text = "\n".join(clean_lines)
+            lines = clean_lines
+
+            # --- EKSTRAKSI SKU ---
+            sku = ""
+            sku_match = re.search(r'Code:\s*([\w\-]+)', body_text, re.IGNORECASE)
+            if sku_match:
+                base_sku = sku_match.group(1)
+                sku = base_sku
+                counter = 1
+                while sku in EXISTING_SKUS:
+                    sku = f"{base_sku}-{counter}"
+                    counter += 1
+                EXISTING_SKUS.add(sku)
+
+            # --- EKSTRAKSI HARGA & TAHUN ---
+            price = "0"
+            price_match = re.search(r'Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            if price_match: price = re.sub(r'[^\d]', '', price_match.group(1)) or "0"
+
+            year = ""
+            year_match = re.search(r'(?:Year|Tahun)\s*:\s*(\d{4})', body_text, re.IGNORECASE)
+            if year_match: year = year_match.group(1)
+
+            # --- MENYUSUN TAGS & DESKRIPSI ---
+            tags_list = ['SG']
+            desc_lines = []
+            for line in lines:
+                if re.search(r'^(Price|Code|Last Post|Order Received|Form|Notes):', line, re.IGNORECASE): break
+                desc_lines.append(line)
+            if desc_lines: desc_lines[0] = f"<strong>{desc_lines[0]}</strong>"
+            if len(desc_lines) > 1:
+                final_description_html = f"<p>{desc_lines[0]}</p><p>" + "<br>".join(desc_lines[1:]) + "</p>"
+            else:
+                final_description_html = f"<p>{desc_lines[0] if desc_lines else ''}</p>"
+
+            # --- DETEKSI MEREK, PAGE TITLE, URL HANDLE & DISPLAY TITLE ---
+            vendor = "Unknown"
+            matched_keyword = ""
+            for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
+                if keyword in clean_title.upper():
+                    vendor = DAFTAR_MEREK_IDWX[keyword]
+                    matched_keyword = keyword
+                    break
+
+            if vendor == "Unknown":
+                vendor = clean_title.split()[0].title()
+                matched_keyword = vendor
+
+            seo_page_title = f"{clean_title} ({year})" if year else clean_title
+            display_title = re.sub(rf"(?i)^({re.escape(matched_keyword)}|{re.escape(vendor)})\s*", "", clean_title).strip()
+            custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
+
+            print(f"   ✅ Data siap: {vendor} | SKU: {sku} | Harga: Rp {price} | Handle: {custom_handle}")
+
+            # --- UPLOAD KE SHOPIFY ---
+            variant_payload = {
+                "price": price, "sku": sku, "requires_shipping": True, "grams": 3000,
+                "weight_unit": "kg", "inventory_management": "shopify", "inventory_policy": "deny", "fulfillment_service": "manual"
+            }
+
+            product_payload = {
+                "product": {
+                    "title": display_title, "body_html": final_description_html, "vendor": vendor,
+                    "tags": ", ".join(tags_list), "handle": custom_handle, "status": "active",
+                    "published": True, "published_scope": "global", "variants": [variant_payload],
+                    "images": image_urls,
+                    "metafields": [{"namespace": "global", "key": "title_tag", "value": seo_page_title[:70], "type": "single_line_text_field"}]
+                }
+            }
+
+            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload)
+
+            if shopify_res.status_code == 201:
+                prod_data = shopify_res.json()['product']
+                new_id = prod_data['id']
+                graphql_product_id = f"gid://shopify/Product/{new_id}"
+                print(f"   🎉 Sukses diunggah! Product ID: {new_id}")
+
+                if CATEGORY_ID:
+                    mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
+                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}})
+
+                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"})
+                if res_pubs.status_code == 200:
+                    pub_inputs = [{"publicationId": edge['node']['id']} for edge in res_pubs.json().get('data', {}).get('publications', {}).get('edges', [])]
+                    if pub_inputs:
+                        mutation_pub = "mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { message } } }"
+                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": {"id": graphql_product_id, "input": pub_inputs}})
+
+                if LOCATION_ID_BLOK_M:
+                    inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
+                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1})
+            else:
+                print(f"   ❌ Gagal mengunggah. Error: {shopify_res.text}")
+
+        except Exception as e:
+            print(f"   ❌ Error saat memproses {url}: {e}")
+
+        time.sleep(1)
+    
+    print("✅ SEMUA PROSES (TWP) SELESAI!")
 
 
 # ==========================================
@@ -440,7 +611,10 @@ def process_photo_studio(blogger_service, urls):
             if desc_lines: desc_lines[0] = f"<strong>{desc_lines[0]}</strong>"
 
             youtube_embed_placeholder = '\n<!-- \n<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;">\n<iframe src="https://www.youtube.com/embed/xxxx" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" frameborder="0" allowfullscreen></iframe>\n</div>\n-->'
-            final_description_html = "<p>" + "<br>".join(desc_lines) + "</p>" + youtube_embed_placeholder
+            if len(desc_lines) > 1:
+                final_description_html = f"<p>{desc_lines[0]}</p><p>" + "<br>".join(desc_lines[1:]) + "</p>" + youtube_embed_placeholder
+            else:
+                final_description_html = f"<p>{desc_lines[0] if desc_lines else ''}</p>" + youtube_embed_placeholder
 
             print(f"   ✅ Data siap: {vendor} | SKU: {sku} | Harga: Rp {price} | Handle: {custom_handle}")
 
@@ -637,7 +811,10 @@ def process_photo_owner(blogger_service, urls):
                 desc_lines.append(line)
 
             if desc_lines: desc_lines[0] = f"<strong>{desc_lines[0]}</strong>"
-            final_description_html = "<p>" + "<br>".join(desc_lines) + "</p>"
+            if len(desc_lines) > 1:
+                final_description_html = f"<p>{desc_lines[0]}</p><p>" + "<br>".join(desc_lines[1:]) + "</p>"
+            else:
+                final_description_html = f"<p>{desc_lines[0] if desc_lines else ''}</p>"
 
             print(f"   ✅ Data siap: {vendor} | Handle: {custom_handle} | SKU: {sku} | Harga: Rp {price}")
 
@@ -691,7 +868,8 @@ def process_photo_owner(blogger_service, urls):
 
                 print(f"   🔍 Mengirim perintah ke Spreadsheet untuk mencentang SKU '{sku}'...")
                 try:
-                    payload_ke_gsheets = {"action": "check_web_owner", "sku": sku}
+                    sku_pencarian = base_sku if 'base_sku' in locals() and base_sku else sku
+                    payload_ke_gsheets = {"action": "check_web_owner", "sku": sku_pencarian}
                     app_res = requests.post(OWNER_APPS_SCRIPT_URL, json=payload_ke_gsheets)
 
                     if app_res.status_code == 200:
@@ -736,40 +914,53 @@ def save_processed_urls(urls, filepath="processed_urls.json"):
         json.dump(list(urls), f)
 
 def load_processed_skus(filepath="processed_skus.json"):
+    today_str = datetime.now().strftime("%Y-%m-%d")
     if os.path.exists(filepath):
         try:
             with open(filepath, "r") as f:
-                return set(json.load(f))
+                data = json.load(f)
+                # Jika format baru dan tanggalnya adalah hari ini
+                if isinstance(data, dict) and data.get("date") == today_str:
+                    return set(data.get("skus", []))
+                # Jika beda hari atau format list lama, otomatis reset
         except Exception:
             pass
     return set()
 
 def save_processed_skus(skus, filepath="processed_skus.json"):
+    today_str = datetime.now().strftime("%Y-%m-%d")
     with open(filepath, "w") as f:
-        json.dump(list(skus), f)
+        json.dump({"date": today_str, "skus": list(skus)}, f)
 
 PROCESSED_SKUS = load_processed_skus()
 
 def get_todays_archive_url():
+    # Tetap dipertahankan kalau-kalau dibutuhkan untuk logging lama
     now = datetime.now()
     date_str = now.strftime("%Y_%m_%d")
     return f"https://www.dualtime.id/{date_str}_archive.html"
 
-def extract_post_links(archive_url):
+def extract_post_links_via_api(blogger_service):
     try:
-        res = requests.get(archive_url, timeout=15)
-        if res.status_code != 200:
-            print(f"⚠️ Halaman arsip belum tersedia (Status: {res.status_code}): {archive_url}")
-            return []
-        soup = BeautifulSoup(res.text, 'html.parser')
+        # Menggunakan API yang terautentikasi untuk mengambil 20 post terbaru
+        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=20, status='LIVE')
+        response = request.execute()
+        
         post_links = set()
-        for a in soup.find_all('a'):
-            href = a.get('href')
-            if href and href.startswith("https://www.dualtime.id/20") and href.endswith(".html") and "_archive.html" not in href:
-                post_links.add(href)
+        items = response.get('items', [])
+        
+        # Ambil tanggal hari ini (format YYYY-MM-DD)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        for post in items:
+            published_date = post.get('published', '')
+            # Pastikan field 'url' ada dan tanggal publikasi (10 karakter pertama) adalah hari ini
+            if 'url' in post and published_date[:10] == today_str:
+                post_links.add(post['url'])
+                
         return list(post_links)
     except Exception as e:
-        print(f"⚠️ Error saat mengambil halaman arsip: {e}")
+        print(f"⚠️ Error saat mengambil daftar post via API: {e}")
         return []
 
 def classify_and_process_url(blogger_service, url):
@@ -780,6 +971,13 @@ def classify_and_process_url(blogger_service, url):
         response = request.execute()
         
         labels = response.get('labels', [])
+        
+        # Pengecekan Wajib Label NEW ARRIVAL
+        is_new_arrival = any('NEW ARRIVAL' in label.upper() for label in labels)
+        if not is_new_arrival:
+            print(f"⏭️ {url} dilewati karena TIDAK memiliki tag/label 'NEW ARRIVAL'.")
+            return True
+            
         raw_html = response.get('content', '')
         
         # Ekstrak SKU terlebih dahulu untuk pengecekan duplikat
@@ -802,41 +1000,54 @@ def classify_and_process_url(blogger_service, url):
             print(f"⏭️ {url} dilewati karena SKU '{sku}' sudah terupload di sesi ini.")
             return True # Dianggap sukses agar link masuk processed_urls
         
-        is_consignment = any('CONSIGNMENT' in label.upper() for label in labels)
+        is_ps = any('CONSIGNMENT_PS' in label.upper() or 'CONSINGMENT_PS' in label.upper() for label in labels)
+        is_notsync = any('NOTSYNC' in label.upper() for label in labels)
+        is_po = any('CONSIGNMENT_PO' in label.upper() or 'CONSINGMENT_PO' in label.upper() for label in labels)
+        is_twp = any('TWP' in label.upper() for label in labels)
+        
+        is_consignment_old = any('CONSIGNMENT' in label.upper() and not is_ps and not is_po for label in labels)
         is_featured = any('FEATURED' in label.upper() for label in labels)
         
-        if is_consignment or is_featured:
-            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (ditemukan label Consignment/Featured)")
+        if is_ps:
+            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label CONSIGNMENT_PS)")
             process_photo_studio(blogger_service, [url])
-            if sku:
-                PROCESSED_SKUS.add(sku)
-                save_processed_skus(PROCESSED_SKUS)
-            return True
-            
-        raw_image_urls = []
-        for img in soup.find_all('img'):
-            if 'src' in img.attrs:
-                img_url = img['src']
-                parent_a = img.find_parent('a')
-                if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
-                    img_url = parent_a['href']
-                high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
-                if high_res_url not in raw_image_urls:
-                    raw_image_urls.append(high_res_url)
-                    
-        image_count = len(raw_image_urls)
-        
-        if sku.startswith("CPO"):
-            if image_count == 1:
-                print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (SKU {sku}, {image_count} Gambar)")
-                process_notsync(blogger_service, [url])
-            else:
-                print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (SKU {sku}, {image_count} Gambar)")
-                process_photo_owner(blogger_service, [url])
+        elif is_notsync:
+            print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (berdasarkan label NOTSYNC)")
+            process_notsync(blogger_service, [url])
+        elif is_po:
+            print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan label CONSIGNMENT_PO)")
+            process_photo_owner(blogger_service, [url])
+        elif is_twp:
+            print(f"📌 {url} diklasifikasikan sebagai: TWP (berdasarkan label TWP)")
+            process_twp(blogger_service, [url])
+        elif is_consignment_old or is_featured:
+            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label Consignment/Featured lama)")
+            process_photo_studio(blogger_service, [url])
         else:
-            print(f"⚠️ {url} tidak dapat diklasifikasikan otomatis (SKU '{sku}', bukan awalan CPO). Akan diproses default sebagai PHOTO STUDIO.")
-            process_photo_studio(blogger_service, [url])
+            raw_image_urls = []
+            for img in soup.find_all('img'):
+                if 'src' in img.attrs:
+                    img_url = img['src']
+                    parent_a = img.find_parent('a')
+                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
+                        img_url = parent_a['href']
+                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
+                    if high_res_url not in raw_image_urls:
+                        raw_image_urls.append(high_res_url)
+                        
+            image_count = len(raw_image_urls)
             
+            if sku.startswith("CPO"):
+                if image_count == 1:
+                    print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (SKU {sku}, {image_count} Gambar)")
+                    process_notsync(blogger_service, [url])
+                else:
+                    print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (SKU {sku}, {image_count} Gambar)")
+                    process_photo_owner(blogger_service, [url])
+            else:
+                print(f"⚠️ {url} tidak dapat diklasifikasikan otomatis (SKU '{sku}', bukan awalan CPO). Akan diproses default sebagai PHOTO STUDIO.")
+                process_photo_studio(blogger_service, [url])
+                
         if sku:
             PROCESSED_SKUS.add(sku)
             save_processed_skus(PROCESSED_SKUS)
@@ -860,6 +1071,8 @@ if __name__ == "__main__":
     # Menjalankan proses sesuai URL manual (jika ada yang diisi di atas)
     if DAFTAR_URL_NOTSYNC:
         process_notsync(blogger_service, DAFTAR_URL_NOTSYNC)
+    if DAFTAR_URL_TWP:
+        process_twp(blogger_service, DAFTAR_URL_TWP)
     if DAFTAR_URL_STUDIO:
         process_photo_studio(blogger_service, DAFTAR_URL_STUDIO)
     if DAFTAR_URL_OWNER:
@@ -870,10 +1083,12 @@ if __name__ == "__main__":
     while True:
         try:
             processed_urls = load_processed_urls()
-            archive_url = get_todays_archive_url()
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Mengecek: {archive_url}")
+            PROCESSED_SKUS = load_processed_skus()
             
-            new_links = extract_post_links(archive_url)
+            archive_url = get_todays_archive_url()
+            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Mengecek: {archive_url} (Via API)")
+            
+            new_links = extract_post_links_via_api(blogger_service)
             
             links_to_process = [link for link in new_links if link not in processed_urls]
             
