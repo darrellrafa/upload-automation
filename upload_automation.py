@@ -6,7 +6,10 @@ import time
 import sys
 import base64
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# Definisikan Zona Waktu WIB (UTC+7)
+WIB = timezone(timedelta(hours=7))
 from urllib.parse import urlparse
 
 # Library Google API dengan metode Refresh Token
@@ -18,8 +21,8 @@ from googleapiclient.discovery import build
 # ==========================================
 # Kredensial Google OAuth (Blogger API)
 GCP_CLIENT_ID = "168252551277-pruc3o3n7q11rqiv4adhqqcmg5ddnc91.apps.googleusercontent.com"
-GCP_CLIENT_SECRET = "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"
-GCP_REFRESH_TOKEN = "1//04L7X62nYALV7CgYIARAAGAQSNwF-L9Ir_8FfDYCXTp-GfDnUtk61UASRAXWNzSmsK3xOR79zkPE9Pqw47UtrL_nxk-K8E_U4LKQ"
+GCP_CLIENT_SECRET = "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"
+GCP_REFRESH_TOKEN = "1//04DXVFdqqaMHMCgYIARAAGAQSNwF-L9IrrTFcVGfgkfQ4ZQuBwn8K9SAc62FW6bF8pf2_IlGS4bttq7V0loWbAgbTLLDs40F2bXg"
 BLOG_ID = "4705513177871222706"
 
 # Kredensial Shopify
@@ -30,14 +33,15 @@ SHOPIFY_CLIENT_SECRET = "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"
 
 # URL Webhook (Apps Script)
 GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyjPvY_dHnz54fhmzEvSOIJJCDyyWOASeaBMcdOkcMxpftXfTHcqPf2/exec"
+APPS_SCRIPT_HISTORY_PHOTO_STUDIO = "https://script.google.com/macros/s/AKfycbxCEcepLLaNouGEmxMJPCFj3vTbWjH41_BFD7tFsYuEkL7h1tV_io3xZBPDSiRC_sgQ/exec"
 FEATURED_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbymvWQh66pDkcSOe1fBC1rQ--VVsTKONFBM-o52qU-8sS0_aEV4JzxFBzEBx1dk-d6O_w/exec"
 OWNER_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyjPvY_dHnz54fhmzEvSOIJJCDyyWOASeaBMcdOkcMxpftXfTHcqPf2/exec"
 
 # Daftar Merek IDWX (gabungan dari semua script)
 DAFTAR_MEREK_IDWX = {
-    "ROLEX": "Rolex", "PATEK PHILIPPE": "Patek Philippe", "AUDEMARS PIGUET": "Audemars Piguet", "JAEGER": "Jaeger-LeCoultre",
+    "ROLEX": "Rolex", "PATEK PHILIPPE": "Patek Philippe", "AUDEMARS PIGUET X SWATCH": "Swatch X Audemars Piguet" ,"AUDEMARS PIGUET": "Audemars Piguet","JAEGER LECOULTRE": "Jaeger-LeCoultre","JAEGER": "Jaeger-LeCoultre", "FRANCK MULLER": "Franck Muller", "BELL & ROSS": "Bell & Ross",
     "OMEGA": "Omega", "TUDOR": "Tudor", "SEIKO": "Seiko", "GRAND SEIKO": "Grand Seiko", "BAUME": "Baume & Mercier", "BAUME & MERCIER": "Baume & Mercier",
-    "CARTIER": "Cartier", "PANERAI": "Panerai", "IWC": "IWC", "BREITLING": "Breitling",
+    "CARTIER": "Cartier", "PANERAI": "Panerai", "IWC": "IWC", "BREITLING": "Breitling", "OTSUKA LOTEC": "Otsuka Lotec",
     "TAG HEUER": "Tag Heuer", "JAEGER-LECOULTRE": "Jaeger-LeCoultre", "JLC": "Jaeger-LeCoultre",
     "HUBLOT": "Hublot", "RICHARD MILLE": "Richard Mille", "VACHERON CONSTANTIN": "Vacheron Constantin",
     "BLANCPAIN": "Blancpain", "CHOPARD": "Chopard", "ZENITH": "Zenith", "LONGINES": "Longines",
@@ -127,27 +131,62 @@ def get_category_id():
     return None
 
 def get_existing_data():
-    print("Mendownload database SKU dan Handle dari Shopify...")
+    print("Mendownload database SKU dan Handle dari Shopify (mohon tunggu)...")
     skus = set()
     handles = set()
     endpoint = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products.json"
     params = {"limit": 250, "fields": "handle,variants"}
+    total_fetched = 0
     while endpoint:
-        response = requests.get(endpoint, headers=HEADERS_SHOPIFY, params=params)
+        try:
+            response = requests.get(endpoint, headers=HEADERS_SHOPIFY, params=params, timeout=30)
+        except requests.exceptions.Timeout:
+            print("⚠️ Timeout saat menghubungi Shopify. Mencoba lagi...")
+            continue
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Error koneksi: {e}")
+            break
+            
         if response.status_code != 200: break
-        for product in response.json().get('products', []):
+        products = response.json().get('products', [])
+        total_fetched += len(products)
+        print(f"⏳ Telah memuat {total_fetched} produk...")
+        
+        for product in products:
             if product.get('handle'): handles.add(product.get('handle'))
             for variant in product.get('variants', []):
                 if variant.get('sku'): skus.add(variant.get('sku'))
 
         link_header = response.headers.get('Link')
         endpoint = None
+        params = None # Hapus params limit saat memanggil link pagination
         if link_header:
             for link in link_header.split(','):
                 if 'rel="next"' in link:
                     endpoint = link[link.find("<")+1:link.find(">")]
                     break
+    print(f"\n✅ Selesai! Database tersinkronisasi ({len(skus)} SKU unik).")
     return skus, handles
+
+def extract_high_res_images(soup):
+    raw_image_urls = []
+    for img in soup.find_all('img'):
+        if 'src' in img.attrs:
+            raw_url = img['src']
+            parent_a = img.find_parent('a')
+            if parent_a and 'href' in parent_a.attrs:
+                href = parent_a['href']
+                # Tangkap jika href adalah file gambar, ATAU domain bawaan Blogger
+                if re.search(r'\.(jpg|jpeg|png|webp)$', href, re.IGNORECASE) or 'googleusercontent.com' in href or 'bp.blogspot.com' in href:
+                    raw_url = href
+            
+            # Konversi format ukuran lama (/s320/) dan format baru (=w640-h480) ke original size (/s0/ atau =s0)
+            high_res_url = re.sub(r'=(s\d+|w\d+-h\d+[^/]*)$', '=s0', raw_url)
+            high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', high_res_url)
+            
+            if high_res_url not in raw_image_urls:
+                raw_image_urls.append(high_res_url)
+    return raw_image_urls
 
 def buat_handle_url(title, year, existing_handles):
     base_handle = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
@@ -190,37 +229,37 @@ def process_notsync(blogger_service, urls):
             raw_html = response.get('content', '')
 
             # --- EKSTRAKSI JUDUL ---
-            clean_title = re.sub(r'\[FOR SALE\]\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'\(\d{4}\)', '', clean_title).strip()
             if not clean_title: continue
 
             soup = BeautifulSoup(raw_html, 'html.parser')
 
             # --- EKSTRAKSI GAMBAR ---
-            raw_image_urls = []
+            raw_image_urls = extract_high_res_images(soup)
+
             image_urls = []
             potongan_kata = clean_title.split()[:3]
             alt_text_rapi = " ".join(potongan_kata).title()
             nama_file_dasar = alt_text_rapi.replace(" ", "-")
 
-            for img in soup.find_all('img'):
-                if 'src' in img.attrs:
-                    img_url = img['src']
-                    parent_a = img.find_parent('a')
-                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
-                        img_url = parent_a['href']
-                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
-                    if high_res_url not in raw_image_urls: raw_image_urls.append(high_res_url)
-
             for i, img_url in enumerate(raw_image_urls):
                 try:
-                    img_res = requests.get(img_url, timeout=10)
+                    img_res = requests.get(img_url, timeout=120)
+                    if img_res.status_code != 200:
+                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
+                        img_res = requests.get(fallback_url, timeout=120)
+                        
                     if img_res.status_code == 200:
                         image_urls.append({
                             "attachment": base64.b64encode(img_res.content).decode('utf-8'),
                             "filename": f"{nama_file_dasar}-{i+1}.jpg",
                             "alt": alt_text_rapi
                         })
-                except Exception: pass
+                    else:
+                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
+                except Exception as e:
+                    print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (Error: {e})")
 
             # --- EKSTRAKSI TEKS ---
             for br in soup.find_all("br"): br.replace_with("\n")
@@ -251,7 +290,12 @@ def process_notsync(blogger_service, urls):
 
             year = ""
             year_match = re.search(r'(?:Year|Tahun)\s*:\s*(\d{4})', body_text, re.IGNORECASE)
-            if year_match: year = year_match.group(1)
+            if year_match: 
+                year = year_match.group(1)
+            else:
+                year_match_title = re.search(r'\b(19\d{2}|20\d{2})\b', raw_title)
+                if year_match_title:
+                    year = year_match_title.group(1)
 
             # --- MENYUSUN TAGS & DESKRIPSI ---
             tags_list = ['NotSync']
@@ -354,37 +398,37 @@ def process_twp(blogger_service, urls):
             raw_html = response.get('content', '')
 
             # --- EKSTRAKSI JUDUL ---
-            clean_title = re.sub(r'\[FOR SALE\]\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'\(\d{4}\)', '', clean_title).strip()
             if not clean_title: continue
 
             soup = BeautifulSoup(raw_html, 'html.parser')
 
             # --- EKSTRAKSI GAMBAR ---
-            raw_image_urls = []
+            raw_image_urls = extract_high_res_images(soup)
+
             image_urls = []
             potongan_kata = clean_title.split()[:3]
             alt_text_rapi = " ".join(potongan_kata).title()
             nama_file_dasar = alt_text_rapi.replace(" ", "-")
 
-            for img in soup.find_all('img'):
-                if 'src' in img.attrs:
-                    img_url = img['src']
-                    parent_a = img.find_parent('a')
-                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
-                        img_url = parent_a['href']
-                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
-                    if high_res_url not in raw_image_urls: raw_image_urls.append(high_res_url)
-
             for i, img_url in enumerate(raw_image_urls):
                 try:
-                    img_res = requests.get(img_url, timeout=10)
+                    img_res = requests.get(img_url, timeout=120)
+                    if img_res.status_code != 200:
+                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
+                        img_res = requests.get(fallback_url, timeout=120)
+
                     if img_res.status_code == 200:
                         image_urls.append({
                             "attachment": base64.b64encode(img_res.content).decode('utf-8'),
                             "filename": f"{nama_file_dasar}-{i+1}.jpg",
                             "alt": alt_text_rapi
                         })
-                except Exception: pass
+                    else:
+                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
+                except Exception as e:
+                    print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (Error: {e})")
 
             # --- EKSTRAKSI TEKS ---
             for br in soup.find_all("br"): br.replace_with("\n")
@@ -415,7 +459,12 @@ def process_twp(blogger_service, urls):
 
             year = ""
             year_match = re.search(r'(?:Year|Tahun)\s*:\s*(\d{4})', body_text, re.IGNORECASE)
-            if year_match: year = year_match.group(1)
+            if year_match: 
+                year = year_match.group(1)
+            else:
+                year_match_title = re.search(r'\b(19\d{2}|20\d{2})\b', raw_title)
+                if year_match_title:
+                    year = year_match_title.group(1)
 
             # --- MENYUSUN TAGS & DESKRIPSI ---
             tags_list = ['SG']
@@ -541,27 +590,27 @@ def process_photo_studio(blogger_service, urls):
 
             soup = BeautifulSoup(raw_html, 'html.parser')
 
-            raw_image_urls, image_urls, first_image_url = [], [], ""
+            raw_image_urls = extract_high_res_images(soup)
+            image_urls, first_image_url = [], ""
             potongan_kata = clean_title.split()[:3]
             alt_text_rapi = " ".join(potongan_kata).title()
             nama_file_dasar = alt_text_rapi.replace(" ", "-")
 
-            for img in soup.find_all('img'):
-                if 'src' in img.attrs:
-                    raw_url = img['src']
-                    parent_a = img.find_parent('a')
-                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE): raw_url = parent_a['href']
-                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', raw_url)
-                    if high_res_url not in raw_image_urls: raw_image_urls.append(high_res_url)
-
             for i, img_url in enumerate(raw_image_urls):
                 try:
-                    img_res = requests.get(img_url, timeout=10)
+                    img_res = requests.get(img_url, timeout=120)
+                    if img_res.status_code != 200:
+                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
+                        img_res = requests.get(fallback_url, timeout=120)
+
                     if img_res.status_code == 200:
                         img_base64 = base64.b64encode(img_res.content).decode('utf-8')
                         image_urls.append({"attachment": img_base64, "filename": f"{nama_file_dasar}-{i+1}.jpg", "alt": alt_text_rapi})
                         if i == 0: first_image_url = img_url
-                except: pass
+                    else:
+                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
+                except Exception as e:
+                    print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (Error: {e})")
 
             for br in soup.find_all("br"): br.replace_with("\n")
             for tag in soup.find_all(['div', 'p', 'li', 'ul', 'h1', 'h2', 'h3']): tag.insert_before("\n"); tag.insert_after("\n")
@@ -661,14 +710,18 @@ def process_photo_studio(blogger_service, urls):
                     requests.post(f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json", headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1})
 
                 # POST KE GOOGLE SHEETS VIA WEBHOOK
+                now = datetime.now(WIB)
+                sku_pencarian = base_sku if base_sku else sku
+
+                # 1. Kirim ke Spreadsheet Slow Moving (Khusus Featured)
                 if is_featured:
                     print(f"   ⭐ Item FEATURED. Mengirim data ke Spreadsheet Slow Moving...")
                     try:
-                        tanggal_hari_ini = datetime.now().strftime("%d/%m/%Y")
+                        tanggal_hari_ini = now.strftime("%d/%m/%Y")
                         payload_featured = {
                             "date": tanggal_hari_ini, "owner": owner.upper() if owner else "", "brand": vendor.upper(),
                             "description": display_title_no_year.upper(), "year": year, "condition": condition.upper(),
-                            "price": price, "reference": reference, "serial_number": base_sku if base_sku else sku, "link": url
+                            "price": price, "reference": reference, "serial_number": sku_pencarian, "link": url
                         }
                         res_feat = requests.post(FEATURED_WEB_APP_URL, json=payload_featured)
                         try:
@@ -677,17 +730,46 @@ def process_photo_studio(blogger_service, urls):
                             else: print(f"   ⚠️ Gagal update Sheets Featured: {res_feat_data.get('message')}")
                         except: pass
                     except Exception as e: print(f"   ⚠️ Error Webhook Featured Sheets: {e}")
-                elif is_consign_item:
-                    print(f"   📝 Item Consign. Update SKU Asli '{base_sku}' di Google Sheets Photo Studio...")
+
+                # 2. Kirim ke Webhook LAMA Google Sheets Photo Studio (Khusus Consignment)
+                if is_consign_item:
+                    print(f"   📝 Item Consign. Update SKU Asli '{sku_pencarian}' di Webhook LAMA Photo Studio...")
                     try:
-                        now = datetime.now()
                         tanggal_hari_ini = now.strftime(f"%A, {now.day} %B %Y")
-                        sku_pencarian = base_sku if base_sku else sku
-                        payload_sheets = {
-                            "sheet_name": "PHOTO STUDIO", "sku": sku_pencarian, "tanggal": tanggal_hari_ini, "photo_url": first_image_url
+                        payload_sheets_lama = {
+                            "sheet_name": "PHOTO STUDIO", 
+                            "sku": sku_pencarian, 
+                            "tanggal": tanggal_hari_ini, 
+                            "photo_url": first_image_url,
+                            "status": "Publish"
                         }
-                        requests.post(GOOGLE_WEB_APP_URL, json=payload_sheets)
-                    except Exception as e: print(f"   ⚠️ Error Webhook Sheets: {e}")
+                        requests.post(GOOGLE_WEB_APP_URL, json=payload_sheets_lama)
+                        print(f"   ✅ Apps Script LAMA (Photo Studio) terkirim untuk SKU {sku_pencarian}!")
+                    except Exception as e:
+                        print(f"   ⚠️ Error Webhook LAMA Sheets: {e}")
+
+                # 3. Kirim ke Webhook BARU (Spreadsheet History Foto Studio) - Update Status ke 'Publish'
+                print(f"   📋 Mengubah Status di Spreadsheet History Foto Studio untuk Serial Number '{sku_pencarian}'...")
+                try:
+                    payload_history_studio = {
+                        "sheet_name": "PHOTO STUDIO",
+                        "sku": sku_pencarian,
+                        "status": "Publish"
+                    }
+                    res_studio = requests.post(APPS_SCRIPT_HISTORY_PHOTO_STUDIO, json=payload_history_studio)
+                    if res_studio.status_code == 200:
+                        try:
+                            res_studio_data = res_studio.json()
+                            if res_studio_data.get("status") == "success":
+                                print(f"   ✅ Apps Script (History Foto Studio): {res_studio_data.get('message')}")
+                            else:
+                                print(f"   ⚠️ Apps Script (History Foto Studio) Info: {res_studio_data.get('message')}")
+                        except Exception:
+                            print(f"   ✅ Apps Script (History Foto Studio) terkirim! (Balasan: {res_studio.text.strip()[:60]})")
+                    else:
+                        print(f"   ⚠️ Gagal menghubungi Apps Script History Foto Studio. Status: {res_studio.status_code}")
+                except Exception as e:
+                    print(f"   ⚠️ Error Webhook History Foto Studio: {e}")
             else:
                 print(f"   ❌ Gagal mengunggah. Error: {shopify_res.text}")
 
@@ -717,7 +799,8 @@ def process_photo_owner(blogger_service, urls):
             response = request.execute()
 
             raw_title = response.get('title', '')
-            clean_title = re.sub(r'\[FOR SALE\]\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', raw_title, flags=re.IGNORECASE).strip()
+            clean_title = re.sub(r'\(\d{4}\)', '', clean_title).strip()
             if not clean_title: continue
 
             raw_html = response.get('content', '')
@@ -738,7 +821,7 @@ def process_photo_owner(blogger_service, urls):
             if year_match_desc:
                 year = year_match_desc.group(1)
             else:
-                year_match_title = re.search(r'\b(19\d{2}|20\d{2})\b', clean_title)
+                year_match_title = re.search(r'\b(19\d{2}|20\d{2})\b', raw_title)
                 if year_match_title:
                     year = year_match_title.group(1)
 
@@ -750,32 +833,26 @@ def process_photo_owner(blogger_service, urls):
             if vendor == "Unknown": vendor = clean_title.split()[0].title()
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
-            short_display_title = re.sub(f"^{vendor}\s+", "", clean_title, flags=re.IGNORECASE).strip()
+            short_display_title = re.sub(rf"^{vendor}\s+", "", clean_title, flags=re.IGNORECASE).strip()
             if year: short_display_title = f"{short_display_title} ({year})"
 
             custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
-            raw_image_urls = []
+            raw_image_urls = extract_high_res_images(soup)
+
             image_urls = []
 
             potongan_kata = clean_title.split()[:3]
             alt_text_rapi = " ".join(potongan_kata).title()
             nama_file_dasar = alt_text_rapi.replace(" ", "-")
 
-            for img in soup.find_all('img'):
-                if 'src' in img.attrs:
-                    raw_url = img['src']
-                    parent_a = img.find_parent('a')
-                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
-                        raw_url = parent_a['href']
-                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', raw_url)
-
-                    if high_res_url not in raw_image_urls:
-                        raw_image_urls.append(high_res_url)
-
             for i, img_url in enumerate(raw_image_urls):
                 try:
-                    img_res = requests.get(img_url, timeout=10)
+                    img_res = requests.get(img_url, timeout=120)
+                    if img_res.status_code != 200:
+                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
+                        img_res = requests.get(fallback_url, timeout=120)
+
                     if img_res.status_code == 200:
                         img_base64 = base64.b64encode(img_res.content).decode('utf-8')
                         custom_filename = f"{nama_file_dasar}-{i+1}.jpg"
@@ -784,8 +861,10 @@ def process_photo_owner(blogger_service, urls):
                             "filename": custom_filename,
                             "alt": alt_text_rapi
                         })
+                    else:
+                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
                 except Exception as e:
-                    print(f"   ⚠️ Gagal memproses gambar {i+1}: {e}")
+                    print(f"   ⚠️ Gagal memproses gambar {i+1} dari URL: {img_url} (Error: {e})")
 
             sku = ""
             sku_match = re.search(r'Code:\s*([\w\-]+)', body_text, re.IGNORECASE)
@@ -914,7 +993,7 @@ def save_processed_urls(urls, filepath="processed_urls.json"):
         json.dump(list(urls), f)
 
 def load_processed_skus(filepath="processed_skus.json"):
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = datetime.now(WIB).strftime("%Y-%m-%d")
     if os.path.exists(filepath):
         try:
             with open(filepath, "r") as f:
@@ -928,7 +1007,7 @@ def load_processed_skus(filepath="processed_skus.json"):
     return set()
 
 def save_processed_skus(skus, filepath="processed_skus.json"):
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = datetime.now(WIB).strftime("%Y-%m-%d")
     with open(filepath, "w") as f:
         json.dump({"date": today_str, "skus": list(skus)}, f)
 
@@ -936,7 +1015,7 @@ PROCESSED_SKUS = load_processed_skus()
 
 def get_todays_archive_url():
     # Tetap dipertahankan kalau-kalau dibutuhkan untuk logging lama
-    now = datetime.now()
+    now = datetime.now(WIB)
     date_str = now.strftime("%Y_%m_%d")
     return f"https://www.dualtime.id/{date_str}_archive.html"
 
@@ -950,7 +1029,7 @@ def extract_post_links_via_api(blogger_service):
         items = response.get('items', [])
         
         # Ambil tanggal hari ini (format YYYY-MM-DD)
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = datetime.now(WIB).strftime("%Y-%m-%d")
         
         for post in items:
             published_date = post.get('published', '')
@@ -1024,16 +1103,7 @@ def classify_and_process_url(blogger_service, url):
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label Consignment/Featured lama)")
             process_photo_studio(blogger_service, [url])
         else:
-            raw_image_urls = []
-            for img in soup.find_all('img'):
-                if 'src' in img.attrs:
-                    img_url = img['src']
-                    parent_a = img.find_parent('a')
-                    if parent_a and 'href' in parent_a.attrs and re.search(r'\.(jpg|jpeg|png|webp)$', parent_a['href'], re.IGNORECASE):
-                        img_url = parent_a['href']
-                    high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s0/\1', img_url)
-                    if high_res_url not in raw_image_urls:
-                        raw_image_urls.append(high_res_url)
+            raw_image_urls = extract_high_res_images(soup)
                         
             image_count = len(raw_image_urls)
             
@@ -1082,11 +1152,14 @@ if __name__ == "__main__":
     
     while True:
         try:
+            # Re-inisialisasi koneksi Blogger setiap putaran agar tidak terjadi Broken Pipe
+            blogger_service = get_blogger_service()
+            
             processed_urls = load_processed_urls()
             PROCESSED_SKUS = load_processed_skus()
             
             archive_url = get_todays_archive_url()
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Mengecek: {archive_url} (Via API)")
+            print(f"\n[{datetime.now(WIB).strftime('%H:%M:%S')}] Mengecek: {archive_url} (Via API)")
             
             new_links = extract_post_links_via_api(blogger_service)
             
