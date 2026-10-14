@@ -40,7 +40,7 @@ OWNER_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyj
 # Daftar Merek IDWX (gabungan dari semua script)
 DAFTAR_MEREK_IDWX = {
     "ROLEX": "Rolex", "PATEK PHILIPPE": "Patek Philippe", "AUDEMARS PIGUET X SWATCH": "Swatch X Audemars Piguet" ,"AUDEMARS PIGUET": "Audemars Piguet","JAEGER LECOULTRE": "Jaeger-LeCoultre","JAEGER": "Jaeger-LeCoultre", "FRANCK MULLER": "Franck Muller", "BELL & ROSS": "Bell & Ross",
-    "OMEGA": "Omega", "TUDOR": "Tudor", "SEIKO": "Seiko", "GRAND SEIKO": "Grand Seiko", "BAUME": "Baume & Mercier", "BAUME & MERCIER": "Baume & Mercier",
+    "OMEGA": "Omega", "TUDOR": "Tudor", "SEIKO": "Seiko", "GRAND SEIKO": "Grand Seiko", "BAUME": "Baume & Mercier", "BAUME & MERCIER": "Baume & Mercier", "ROGER DUBUIS": "Roger Dubuis",
     "CARTIER": "Cartier", "PANERAI": "Panerai", "IWC": "IWC", "BREITLING": "Breitling", "OTSUKA LOTEC": "Otsuka Lotec",
     "TAG HEUER": "Tag Heuer", "JAEGER-LECOULTRE": "Jaeger-LeCoultre", "JLC": "Jaeger-LeCoultre",
     "HUBLOT": "Hublot", "RICHARD MILLE": "Richard Mille", "VACHERON CONSTANTIN": "Vacheron Constantin",
@@ -87,50 +87,78 @@ def get_blogger_service():
 # ==========================================
 # 4. FUNGSI API SHOPIFY & HELPER
 # ==========================================
-def get_shopify_access_token():
-    print("Meminta token akses API baru dari Shopify...")
-    token_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/oauth/access_token"
-    payload = {
-        "grant_type": "client_credentials",
-        "client_id": SHOPIFY_CLIENT_ID,
-        "client_secret": SHOPIFY_CLIENT_SECRET
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    response = requests.post(token_url, headers=headers, data=payload)
-    if response.status_code == 200:
-        return response.json().get('access_token')
-    else:
-        print(f"❌ Gagal mendapatkan token: {response.text}")
-        sys.exit()
+def ensure_shopify_token(force_refresh=False):
+    global SHOPIFY_ACCESS_TOKEN, SHOPIFY_TOKEN_EXPIRY, HEADERS_SHOPIFY
+    now = time.time()
+    # Refresh jika token belum ada, diminta force_refresh, atau masa berlaku tersisa < 10 menit
+    if force_refresh or not SHOPIFY_ACCESS_TOKEN or now >= (SHOPIFY_TOKEN_EXPIRY - 600):
+        print("🔄 Meminta/memperbarui token akses API baru dari Shopify...")
+        token_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/oauth/access_token"
+        payload = {
+            "grant_type": "client_credentials",
+            "client_id": SHOPIFY_CLIENT_ID,
+            "client_secret": SHOPIFY_CLIENT_SECRET
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        for attempt in range(3):
+            try:
+                response = requests.post(token_url, headers=headers, data=payload, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    SHOPIFY_ACCESS_TOKEN = data.get('access_token')
+                    expires_in = int(data.get('expires_in', 86399))
+                    SHOPIFY_TOKEN_EXPIRY = now + expires_in
+                    HEADERS_SHOPIFY["X-Shopify-Access-Token"] = SHOPIFY_ACCESS_TOKEN
+                    print(f"✅ Token Shopify berhasil diperbarui! (Masa berlaku ~{expires_in // 3600} jam)")
+                    return SHOPIFY_ACCESS_TOKEN
+                else:
+                    print(f"⚠️ Gagal mendapatkan token Shopify (HTTP {response.status_code}): {response.text}")
+            except Exception as e:
+                print(f"⚠️ Error koneksi saat meminta token Shopify (percobaan {attempt+1}): {e}")
+            time.sleep(2)
+        print("❌ Gagal memperbarui token Shopify setelah 3 percobaan.")
+        return SHOPIFY_ACCESS_TOKEN
+    return SHOPIFY_ACCESS_TOKEN
 
 # Inisialisasi token & header secara global
-SHOPIFY_ACCESS_TOKEN = get_shopify_access_token()
+SHOPIFY_ACCESS_TOKEN = None
+SHOPIFY_TOKEN_EXPIRY = 0
 HEADERS_SHOPIFY = {
-    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
     "Content-Type": "application/json"
 }
+ensure_shopify_token(force_refresh=True)
+
 GRAPHQL_URL = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/graphql.json"
 SHOPIFY_UPLOAD_ENDPOINT = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products.json"
 
 
 def get_target_location(target_location_name):
+    ensure_shopify_token()
     url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/locations.json"
-    res = requests.get(url, headers=HEADERS_SHOPIFY)
-    if res.status_code == 200:
-        for loc in res.json().get('locations', []):
-            if loc.get('name') == target_location_name:
-                return loc['id']
+    try:
+        res = requests.get(url, headers=HEADERS_SHOPIFY, timeout=30)
+        if res.status_code == 200:
+            for loc in res.json().get('locations', []):
+                if loc.get('name') == target_location_name:
+                    return loc['id']
+    except Exception as e:
+        print(f"⚠️ Error get_target_location({target_location_name}): {e}")
     return None
 
 def get_category_id():
+    ensure_shopify_token()
     query = '{ taxonomy { categories(search: "Watches", first: 1) { edges { node { id fullName } } } } }'
-    res = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": query})
-    if res.status_code == 200:
-        edges = res.json().get('data', {}).get('taxonomy', {}).get('categories', {}).get('edges', [])
-        if edges: return edges[0]['node']['id']
+    try:
+        res = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": query}, timeout=30)
+        if res.status_code == 200:
+            edges = res.json().get('data', {}).get('taxonomy', {}).get('categories', {}).get('edges', [])
+            if edges: return edges[0]['node']['id']
+    except Exception as e:
+        print(f"⚠️ Error get_category_id: {e}")
     return None
 
 def get_existing_data():
+    ensure_shopify_token()
     print("Mendownload database SKU dan Handle dari Shopify (mohon tunggu)...")
     skus = set()
     handles = set()
@@ -202,19 +230,100 @@ def buat_handle_url(title, year, existing_handles):
     existing_handles.add(handle)
     return handle
 
+# Headers & Session khusus untuk download gambar agar tidak diblokir/dibatasi CDN Google
+IMAGE_SESSION = requests.Session()
+IMAGE_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+})
+
+def download_single_image(img_url, max_retries=3):
+    """
+    Mendownload konten gambar dari URL Blogger dengan retry berulang,
+    headers browser, dan fallback multi-resolusi (/s0/, /s2000/, /s1600/, /w1600/).
+    Mengembalikan bytes jika sukses, atau None jika seluruh resolusi gagal.
+    """
+    candidates = [img_url]
+    if '/s0/' in img_url or '=s0' in img_url:
+        candidates.append(img_url.replace('/s0/', '/s2000/').replace('=s0', '=s2000'))
+        candidates.append(img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600'))
+        candidates.append(img_url.replace('/s0/', '/w1600/').replace('=s0', '=w1600'))
+
+    for candidate in candidates:
+        for attempt in range(max_retries):
+            try:
+                res = IMAGE_SESSION.get(candidate, timeout=45)
+                if res.status_code == 200 and len(res.content) > 0:
+                    return res.content
+                elif res.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(1.5 * (attempt + 1))
+            except Exception:
+                time.sleep(1.5 * (attempt + 1))
+    return None
+
+def prepare_image_payloads(raw_image_urls, clean_title):
+    """
+    Mempersiapkan array payload gambar untuk Shopify.
+    - Mencoba download sebagai base64 'attachment' dengan nama file SEO-friendly.
+    - JIKA download base64 gagal/timeout pada server setelah semua percobaan,
+      SECARA OTOMATIS fallback ke URL 'src', sehingga Shopify yang akan
+      mendownload gambar langsung dari CDN Google dan TIDAK ADA GAMBAR YANG HILANG!
+    """
+    image_payloads = []
+    potongan_kata = clean_title.split()[:3]
+    alt_text_rapi = " ".join(potongan_kata).title()
+    nama_file_dasar = alt_text_rapi.replace(" ", "-")
+
+    for i, img_url in enumerate(raw_image_urls):
+        filename = f"{nama_file_dasar}-{i+1}.jpg"
+        content_bytes = download_single_image(img_url)
+        
+        if content_bytes:
+            img_base64 = base64.b64encode(content_bytes).decode('utf-8')
+            image_payloads.append({
+                "attachment": img_base64,
+                "filename": filename,
+                "alt": alt_text_rapi
+            })
+        else:
+            print(f"   ⚠️ Gagal download lokal gambar {i+1} dari {img_url}. Menggunakan fallback link 'src' langsung ke Shopify.")
+            image_payloads.append({
+                "src": img_url,
+                "alt": alt_text_rapi
+            })
+
+    return image_payloads, alt_text_rapi
+
 # Variabel Global Database Shopify
 LOCATION_ID_BLOK_M = get_target_location("DUALTIME - BLOK M PLAZA")
 LOCATION_ID_OWNER = get_target_location("OWNER (S)")
 CATEGORY_ID = get_category_id()
 EXISTING_SKUS, EXISTING_HANDLES = get_existing_data()
+LAST_SYNC_DATE = datetime.now(WIB).strftime("%Y-%m-%d")
+
+def ensure_shopify_metadata(force_resync=False):
+    global LOCATION_ID_BLOK_M, LOCATION_ID_OWNER, CATEGORY_ID, EXISTING_SKUS, EXISTING_HANDLES
+    if not LOCATION_ID_BLOK_M:
+        LOCATION_ID_BLOK_M = get_target_location("DUALTIME - BLOK M PLAZA")
+    if not LOCATION_ID_OWNER:
+        LOCATION_ID_OWNER = get_target_location("OWNER (S)")
+    if not CATEGORY_ID:
+        CATEGORY_ID = get_category_id()
+    if force_resync:
+        new_skus, new_handles = get_existing_data()
+        if new_skus:
+            EXISTING_SKUS = new_skus
+        if new_handles:
+            EXISTING_HANDLES = new_handles
 
 # ==========================================
 # 5. FUNGSI PROSES UNTUK NOTSYNC
 # ==========================================
 def process_notsync(blogger_service, urls):
     if not urls:
-        return
+        return []
         
+    success_urls = []
     print(f"\nMemulai proses pemindahan data untuk {len(urls)} item (Format NotSync)...")
     for idx, url in enumerate(urls, 1):
         print(f"\n[{idx}/{len(urls)}] Memproses: {url}")
@@ -238,28 +347,7 @@ def process_notsync(blogger_service, urls):
             # --- EKSTRAKSI GAMBAR ---
             raw_image_urls = extract_high_res_images(soup)
 
-            image_urls = []
-            potongan_kata = clean_title.split()[:3]
-            alt_text_rapi = " ".join(potongan_kata).title()
-            nama_file_dasar = alt_text_rapi.replace(" ", "-")
-
-            for i, img_url in enumerate(raw_image_urls):
-                try:
-                    img_res = requests.get(img_url, timeout=120)
-                    if img_res.status_code != 200:
-                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
-                        img_res = requests.get(fallback_url, timeout=120)
-                        
-                    if img_res.status_code == 200:
-                        image_urls.append({
-                            "attachment": base64.b64encode(img_res.content).decode('utf-8'),
-                            "filename": f"{nama_file_dasar}-{i+1}.jpg",
-                            "alt": alt_text_rapi
-                        })
-                    else:
-                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
-                except Exception as e:
-                    print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (Error: {e})")
+            image_urls, alt_text_rapi = prepare_image_payloads(raw_image_urls, clean_title)
 
             # --- EKSTRAKSI TEKS ---
             for br in soup.find_all("br"): br.replace_with("\n")
@@ -273,7 +361,7 @@ def process_notsync(blogger_service, urls):
 
             # --- EKSTRAKSI SKU ---
             sku = ""
-            sku_match = re.search(r'Code:\s*([\w\-]+)', body_text, re.IGNORECASE)
+            sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
             if sku_match:
                 base_sku = sku_match.group(1)
                 sku = base_sku
@@ -344,7 +432,13 @@ def process_notsync(blogger_service, urls):
                 }
             }
 
-            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload)
+            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
+
+            # Jika 401 Unauthorized, refresh token dan coba lagi sekali
+            if shopify_res.status_code == 401:
+                print("   ⚠️ Token Shopify expired (401). Meminta token baru dan mengulang upload...")
+                ensure_shopify_token(force_refresh=True)
+                shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
 
             if shopify_res.status_code == 201:
                 prod_data = shopify_res.json()['product']
@@ -354,18 +448,20 @@ def process_notsync(blogger_service, urls):
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
-                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}})
+                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}}, timeout=30)
 
-                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"})
+                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"}, timeout=30)
                 if res_pubs.status_code == 200:
                     pub_inputs = [{"publicationId": edge['node']['id']} for edge in res_pubs.json().get('data', {}).get('publications', {}).get('edges', [])]
                     if pub_inputs:
                         mutation_pub = "mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { message } } }"
-                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": {"id": graphql_product_id, "input": pub_inputs}})
+                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": {"id": graphql_product_id, "input": pub_inputs}}, timeout=30)
 
                 if LOCATION_ID_BLOK_M:
                     inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
-                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1})
+                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1}, timeout=30)
+
+                success_urls.append(url)
             else:
                 print(f"   ❌ Gagal mengunggah. Error: {shopify_res.text}")
 
@@ -375,6 +471,7 @@ def process_notsync(blogger_service, urls):
         time.sleep(1)
     
     print("✅ SEMUA PROSES (NOTSYNC) SELESAI!")
+    return success_urls
 
 
 # ==========================================
@@ -382,8 +479,9 @@ def process_notsync(blogger_service, urls):
 # ==========================================
 def process_twp(blogger_service, urls):
     if not urls:
-        return
+        return []
         
+    success_urls = []
     print(f"\nMemulai proses pemindahan data untuk {len(urls)} item (Format TWP)...")
     for idx, url in enumerate(urls, 1):
         print(f"\n[{idx}/{len(urls)}] Memproses: {url}")
@@ -407,28 +505,7 @@ def process_twp(blogger_service, urls):
             # --- EKSTRAKSI GAMBAR ---
             raw_image_urls = extract_high_res_images(soup)
 
-            image_urls = []
-            potongan_kata = clean_title.split()[:3]
-            alt_text_rapi = " ".join(potongan_kata).title()
-            nama_file_dasar = alt_text_rapi.replace(" ", "-")
-
-            for i, img_url in enumerate(raw_image_urls):
-                try:
-                    img_res = requests.get(img_url, timeout=120)
-                    if img_res.status_code != 200:
-                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
-                        img_res = requests.get(fallback_url, timeout=120)
-
-                    if img_res.status_code == 200:
-                        image_urls.append({
-                            "attachment": base64.b64encode(img_res.content).decode('utf-8'),
-                            "filename": f"{nama_file_dasar}-{i+1}.jpg",
-                            "alt": alt_text_rapi
-                        })
-                    else:
-                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
-                except Exception as e:
-                    print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (Error: {e})")
+            image_urls, alt_text_rapi = prepare_image_payloads(raw_image_urls, clean_title)
 
             # --- EKSTRAKSI TEKS ---
             for br in soup.find_all("br"): br.replace_with("\n")
@@ -442,7 +519,7 @@ def process_twp(blogger_service, urls):
 
             # --- EKSTRAKSI SKU ---
             sku = ""
-            sku_match = re.search(r'Code:\s*([\w\-]+)', body_text, re.IGNORECASE)
+            sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
             if sku_match:
                 base_sku = sku_match.group(1)
                 sku = base_sku
@@ -513,7 +590,13 @@ def process_twp(blogger_service, urls):
                 }
             }
 
-            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload)
+            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
+
+            # Jika 401 Unauthorized, refresh token dan coba lagi sekali
+            if shopify_res.status_code == 401:
+                print("   ⚠️ Token Shopify expired (401). Meminta token baru dan mengulang upload...")
+                ensure_shopify_token(force_refresh=True)
+                shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
 
             if shopify_res.status_code == 201:
                 prod_data = shopify_res.json()['product']
@@ -523,18 +606,20 @@ def process_twp(blogger_service, urls):
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
-                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}})
+                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}}, timeout=30)
 
-                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"})
+                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"}, timeout=30)
                 if res_pubs.status_code == 200:
                     pub_inputs = [{"publicationId": edge['node']['id']} for edge in res_pubs.json().get('data', {}).get('publications', {}).get('edges', [])]
                     if pub_inputs:
                         mutation_pub = "mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { message } } }"
-                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": {"id": graphql_product_id, "input": pub_inputs}})
+                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": {"id": graphql_product_id, "input": pub_inputs}}, timeout=30)
 
                 if LOCATION_ID_BLOK_M:
                     inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
-                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1})
+                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1}, timeout=30)
+
+                success_urls.append(url)
             else:
                 print(f"   ❌ Gagal mengunggah. Error: {shopify_res.text}")
 
@@ -544,6 +629,7 @@ def process_twp(blogger_service, urls):
         time.sleep(1)
     
     print("✅ SEMUA PROSES (TWP) SELESAI!")
+    return success_urls
 
 
 # ==========================================
@@ -551,8 +637,9 @@ def process_twp(blogger_service, urls):
 # ==========================================
 def process_photo_studio(blogger_service, urls):
     if not urls:
-        return
+        return []
         
+    success_urls = []
     print(f"\nMemulai proses pemindahan data untuk {len(urls)} item (Format Photo Studio)...")
     for idx, url in enumerate(urls, 1):
         print(f"\n[{idx}/{len(urls)}] Memproses: {url}")
@@ -591,26 +678,8 @@ def process_photo_studio(blogger_service, urls):
             soup = BeautifulSoup(raw_html, 'html.parser')
 
             raw_image_urls = extract_high_res_images(soup)
-            image_urls, first_image_url = [], ""
-            potongan_kata = clean_title.split()[:3]
-            alt_text_rapi = " ".join(potongan_kata).title()
-            nama_file_dasar = alt_text_rapi.replace(" ", "-")
-
-            for i, img_url in enumerate(raw_image_urls):
-                try:
-                    img_res = requests.get(img_url, timeout=120)
-                    if img_res.status_code != 200:
-                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
-                        img_res = requests.get(fallback_url, timeout=120)
-
-                    if img_res.status_code == 200:
-                        img_base64 = base64.b64encode(img_res.content).decode('utf-8')
-                        image_urls.append({"attachment": img_base64, "filename": f"{nama_file_dasar}-{i+1}.jpg", "alt": alt_text_rapi})
-                        if i == 0: first_image_url = img_url
-                    else:
-                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
-                except Exception as e:
-                    print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (Error: {e})")
+            image_urls, alt_text_rapi = prepare_image_payloads(raw_image_urls, clean_title)
+            first_image_url = raw_image_urls[0] if raw_image_urls else ""
 
             for br in soup.find_all("br"): br.replace_with("\n")
             for tag in soup.find_all(['div', 'p', 'li', 'ul', 'h1', 'h2', 'h3']): tag.insert_before("\n"); tag.insert_after("\n")
@@ -690,7 +759,13 @@ def process_photo_studio(blogger_service, urls):
             if options_payload: product_payload["product"]["options"] = options_payload
 
             print(f"   ⏳ Mengunggah produk utama...")
-            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload)
+            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
+
+            # Jika 401 Unauthorized, refresh token dan coba lagi sekali
+            if shopify_res.status_code == 401:
+                print("   ⚠️ Token Shopify expired (401). Meminta token baru dan mengulang upload...")
+                ensure_shopify_token(force_refresh=True)
+                shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
 
             if shopify_res.status_code == 201:
                 prod_data = shopify_res.json()['product']
@@ -699,15 +774,15 @@ def process_photo_studio(blogger_service, urls):
                 print(f"   🎉 Sukses diunggah! Product ID: {new_id}")
 
                 if CATEGORY_ID:
-                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }", "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}})
+                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }", "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}}, timeout=30)
 
-                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"})
+                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "{ publications(first: 20) { edges { node { id name } } } }"}, timeout=30)
                 if res_pubs.status_code == 200:
                     pub_inputs = [{"publicationId": edge['node']['id']} for edge in res_pubs.json().get('data', {}).get('publications', {}).get('edges', [])]
-                    if pub_inputs: requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { message } } }", "variables": {"id": graphql_product_id, "input": pub_inputs}})
+                    if pub_inputs: requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { message } } }", "variables": {"id": graphql_product_id, "input": pub_inputs}}, timeout=30)
 
                 if LOCATION_ID_BLOK_M:
-                    requests.post(f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json", headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1})
+                    requests.post(f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json", headers=HEADERS_SHOPIFY, json={"location_id": LOCATION_ID_BLOK_M, "inventory_item_id": prod_data['variants'][0]['inventory_item_id'], "available": 1}, timeout=30)
 
                 # POST KE GOOGLE SHEETS VIA WEBHOOK
                 now = datetime.now(WIB)
@@ -723,7 +798,7 @@ def process_photo_studio(blogger_service, urls):
                             "description": display_title_no_year.upper(), "year": year, "condition": condition.upper(),
                             "price": price, "reference": reference, "serial_number": sku_pencarian, "link": url
                         }
-                        res_feat = requests.post(FEATURED_WEB_APP_URL, json=payload_featured)
+                        res_feat = requests.post(FEATURED_WEB_APP_URL, json=payload_featured, timeout=30)
                         try:
                             res_feat_data = res_feat.json()
                             if res_feat.status_code == 200 and res_feat_data.get("status") == "success": print(f"   📊 Berhasil! {res_feat_data.get('message')}")
@@ -743,7 +818,7 @@ def process_photo_studio(blogger_service, urls):
                             "photo_url": first_image_url,
                             "status": "Publish"
                         }
-                        requests.post(GOOGLE_WEB_APP_URL, json=payload_sheets_lama)
+                        requests.post(GOOGLE_WEB_APP_URL, json=payload_sheets_lama, timeout=30)
                         print(f"   ✅ Apps Script LAMA (Photo Studio) terkirim untuk SKU {sku_pencarian}!")
                     except Exception as e:
                         print(f"   ⚠️ Error Webhook LAMA Sheets: {e}")
@@ -756,7 +831,7 @@ def process_photo_studio(blogger_service, urls):
                         "sku": sku_pencarian,
                         "status": "Publish"
                     }
-                    res_studio = requests.post(APPS_SCRIPT_HISTORY_PHOTO_STUDIO, json=payload_history_studio)
+                    res_studio = requests.post(APPS_SCRIPT_HISTORY_PHOTO_STUDIO, json=payload_history_studio, timeout=30)
                     if res_studio.status_code == 200:
                         try:
                             res_studio_data = res_studio.json()
@@ -770,6 +845,8 @@ def process_photo_studio(blogger_service, urls):
                         print(f"   ⚠️ Gagal menghubungi Apps Script History Foto Studio. Status: {res_studio.status_code}")
                 except Exception as e:
                     print(f"   ⚠️ Error Webhook History Foto Studio: {e}")
+
+                success_urls.append(url)
             else:
                 print(f"   ❌ Gagal mengunggah. Error: {shopify_res.text}")
 
@@ -779,6 +856,7 @@ def process_photo_studio(blogger_service, urls):
         time.sleep(1)
 
     print("✅ SEMUA PROSES (PHOTO STUDIO) SELESAI!")
+    return success_urls
 
 
 # ==========================================
@@ -786,8 +864,9 @@ def process_photo_studio(blogger_service, urls):
 # ==========================================
 def process_photo_owner(blogger_service, urls):
     if not urls:
-        return
+        return []
         
+    success_urls = []
     print(f"\nMemulai proses pemindahan data untuk {len(urls)} item (Format Photo Owner)...")
     for idx, url in enumerate(urls, 1):
         print(f"\n[{idx}/{len(urls)}] Memproses: {url}")
@@ -840,34 +919,10 @@ def process_photo_owner(blogger_service, urls):
 
             raw_image_urls = extract_high_res_images(soup)
 
-            image_urls = []
-
-            potongan_kata = clean_title.split()[:3]
-            alt_text_rapi = " ".join(potongan_kata).title()
-            nama_file_dasar = alt_text_rapi.replace(" ", "-")
-
-            for i, img_url in enumerate(raw_image_urls):
-                try:
-                    img_res = requests.get(img_url, timeout=120)
-                    if img_res.status_code != 200:
-                        fallback_url = img_url.replace('/s0/', '/s1600/').replace('=s0', '=s1600')
-                        img_res = requests.get(fallback_url, timeout=120)
-
-                    if img_res.status_code == 200:
-                        img_base64 = base64.b64encode(img_res.content).decode('utf-8')
-                        custom_filename = f"{nama_file_dasar}-{i+1}.jpg"
-                        image_urls.append({
-                            "attachment": img_base64,
-                            "filename": custom_filename,
-                            "alt": alt_text_rapi
-                        })
-                    else:
-                        print(f"   ⚠️ Gagal download gambar {i+1} dari URL: {img_url} (HTTP {img_res.status_code})")
-                except Exception as e:
-                    print(f"   ⚠️ Gagal memproses gambar {i+1} dari URL: {img_url} (Error: {e})")
+            image_urls, alt_text_rapi = prepare_image_payloads(raw_image_urls, clean_title)
 
             sku = ""
-            sku_match = re.search(r'Code:\s*([\w\-]+)', body_text, re.IGNORECASE)
+            sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
             if sku_match:
                 base_sku = sku_match.group(1)
                 sku = base_sku
@@ -912,7 +967,13 @@ def process_photo_owner(blogger_service, urls):
             }
 
             print(f"   ⏳ Mengunggah produk utama...")
-            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload)
+            shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
+
+            # Jika 401 Unauthorized, refresh token dan coba lagi sekali
+            if shopify_res.status_code == 401:
+                print("   ⚠️ Token Shopify expired (401). Meminta token baru dan mengulang upload...")
+                ensure_shopify_token(force_refresh=True)
+                shopify_res = requests.post(SHOPIFY_UPLOAD_ENDPOINT, headers=HEADERS_SHOPIFY, json=product_payload, timeout=60)
 
             if shopify_res.status_code == 201:
                 prod_data = shopify_res.json()['product']
@@ -923,11 +984,11 @@ def process_photo_owner(blogger_service, urls):
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
                     variables = {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}
-                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": variables})
+                    requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": variables}, timeout=30)
                     print(f"   🏷️  Kategori diatur ke 'Watches'.")
 
                 query_pubs = "{ publications(first: 20) { edges { node { id name } } } }"
-                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": query_pubs})
+                res_pubs = requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": query_pubs}, timeout=30)
                 if res_pubs.status_code == 200:
                     edges = res_pubs.json().get('data', {}).get('publications', {}).get('edges', [])
                     pub_inputs = [{"publicationId": edge['node']['id']} for edge in edges]
@@ -935,21 +996,21 @@ def process_photo_owner(blogger_service, urls):
                     if pub_inputs:
                         mutation_pub = "mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { message } } }"
                         vars_pub = {"id": graphql_product_id, "input": pub_inputs}
-                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": vars_pub})
+                        requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation_pub, "variables": vars_pub}, timeout=30)
                         print(f"   📢 Berhasil dipublikasikan ke {len(pub_inputs)} Sales Channels.")
 
                 if LOCATION_ID_OWNER:
                     inventory_item_id = prod_data['variants'][0]['inventory_item_id']
                     inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
                     inv_payload = {"location_id": LOCATION_ID_OWNER, "inventory_item_id": inventory_item_id, "available": 1}
-                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json=inv_payload)
+                    requests.post(inv_url, headers=HEADERS_SHOPIFY, json=inv_payload, timeout=30)
                     print(f"   📦 Stok disetel ke 1 untuk OWNER (S).")
 
                 print(f"   🔍 Mengirim perintah ke Spreadsheet untuk mencentang SKU '{sku}'...")
                 try:
                     sku_pencarian = base_sku if 'base_sku' in locals() and base_sku else sku
                     payload_ke_gsheets = {"action": "check_web_owner", "sku": sku_pencarian}
-                    app_res = requests.post(OWNER_APPS_SCRIPT_URL, json=payload_ke_gsheets)
+                    app_res = requests.post(OWNER_APPS_SCRIPT_URL, json=payload_ke_gsheets, timeout=30)
 
                     if app_res.status_code == 200:
                         try:
@@ -965,6 +1026,7 @@ def process_photo_owner(blogger_service, urls):
                 except Exception as e:
                     print(f"   ❌ Error saat memanggil Apps Script: {e}")
 
+                success_urls.append(url)
             else:
                 print(f"   ❌ Gagal mengunggah ke Shopify. Error: {shopify_res.text}")
 
@@ -974,6 +1036,7 @@ def process_photo_owner(blogger_service, urls):
         time.sleep(1)
 
     print("✅ SEMUA PROSES (PHOTO OWNER) SELESAI!")
+    return success_urls
 
 
 # ==========================================
@@ -1028,13 +1091,16 @@ def extract_post_links_via_api(blogger_service):
         post_links = set()
         items = response.get('items', [])
         
-        # Ambil tanggal hari ini (format YYYY-MM-DD)
-        today_str = datetime.now(WIB).strftime("%Y-%m-%d")
+        # Ambil tanggal hari ini dan kemarin WIB untuk antisipasi postingan larut malam di sekitar pergantian hari
+        now_wib = datetime.now(WIB)
+        today_str = now_wib.strftime("%Y-%m-%d")
+        yesterday_str = (now_wib - timedelta(days=1)).strftime("%Y-%m-%d")
+        valid_dates = {today_str, yesterday_str}
         
         for post in items:
             published_date = post.get('published', '')
-            # Pastikan field 'url' ada dan tanggal publikasi (10 karakter pertama) adalah hari ini
-            if 'url' in post and published_date[:10] == today_str:
+            # Pastikan field 'url' ada dan tanggal publikasi berada di rentang valid
+            if 'url' in post and published_date[:10] in valid_dates:
                 post_links.add(post['url'])
                 
         return list(post_links)
@@ -1071,7 +1137,7 @@ def classify_and_process_url(blogger_service, url):
         body_text = "\n".join(clean_lines)
         
         sku = ""
-        sku_match = re.search(r'Code:\s*([\w\-]+)', body_text, re.IGNORECASE)
+        sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
         if sku_match:
             sku = sku_match.group(1).upper()
             
@@ -1087,21 +1153,22 @@ def classify_and_process_url(blogger_service, url):
         is_consignment_old = any('CONSIGNMENT' in label.upper() and not is_ps and not is_po for label in labels)
         is_featured = any('FEATURED' in label.upper() for label in labels)
         
+        success_urls = []
         if is_ps:
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label CONSIGNMENT_PS)")
-            process_photo_studio(blogger_service, [url])
+            success_urls = process_photo_studio(blogger_service, [url])
         elif is_notsync:
             print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (berdasarkan label NOTSYNC)")
-            process_notsync(blogger_service, [url])
+            success_urls = process_notsync(blogger_service, [url])
         elif is_po:
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan label CONSIGNMENT_PO)")
-            process_photo_owner(blogger_service, [url])
+            success_urls = process_photo_owner(blogger_service, [url])
         elif is_twp:
             print(f"📌 {url} diklasifikasikan sebagai: TWP (berdasarkan label TWP)")
-            process_twp(blogger_service, [url])
+            success_urls = process_twp(blogger_service, [url])
         elif is_consignment_old or is_featured:
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label Consignment/Featured lama)")
-            process_photo_studio(blogger_service, [url])
+            success_urls = process_photo_studio(blogger_service, [url])
         else:
             raw_image_urls = extract_high_res_images(soup)
                         
@@ -1110,19 +1177,22 @@ def classify_and_process_url(blogger_service, url):
             if sku.startswith("CPO"):
                 if image_count == 1:
                     print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (SKU {sku}, {image_count} Gambar)")
-                    process_notsync(blogger_service, [url])
+                    success_urls = process_notsync(blogger_service, [url])
                 else:
                     print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (SKU {sku}, {image_count} Gambar)")
-                    process_photo_owner(blogger_service, [url])
+                    success_urls = process_photo_owner(blogger_service, [url])
             else:
                 print(f"⚠️ {url} tidak dapat diklasifikasikan otomatis (SKU '{sku}', bukan awalan CPO). Akan diproses default sebagai PHOTO STUDIO.")
-                process_photo_studio(blogger_service, [url])
+                success_urls = process_photo_studio(blogger_service, [url])
                 
-        if sku:
-            PROCESSED_SKUS.add(sku)
-            save_processed_skus(PROCESSED_SKUS)
-            
-        return True
+        if url in (success_urls or []):
+            if sku:
+                PROCESSED_SKUS.add(sku)
+                save_processed_skus(PROCESSED_SKUS)
+            return True
+        else:
+            print(f"❌ Upload produk gagal untuk {url}. Tidak akan dicatat sebagai processed agar bisa dicoba kembali.")
+            return False
             
     except Exception as e:
         print(f"❌ Gagal mengklasifikasikan atau memproses {url}: {e}")
@@ -1155,6 +1225,16 @@ if __name__ == "__main__":
             # Re-inisialisasi koneksi Blogger setiap putaran agar tidak terjadi Broken Pipe
             blogger_service = get_blogger_service()
             
+            # Pastikan token Shopify masih aktif (refresh otomatis sebelum 24 jam)
+            ensure_shopify_token()
+
+            # Pengecekan pergantian hari untuk resync data Shopify (SKU & Handle)
+            current_date_str = datetime.now(WIB).strftime("%Y-%m-%d")
+            if current_date_str != LAST_SYNC_DATE:
+                print(f"\n🔄 Pergantian hari terdeteksi ({LAST_SYNC_DATE} -> {current_date_str}). Menyelaraskan ulang data Shopify...")
+                ensure_shopify_metadata(force_resync=True)
+                LAST_SYNC_DATE = current_date_str
+
             processed_urls = load_processed_urls()
             PROCESSED_SKUS = load_processed_skus()
             
