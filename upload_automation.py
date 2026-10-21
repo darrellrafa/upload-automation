@@ -22,7 +22,7 @@ from googleapiclient.discovery import build
 # Kredensial Google OAuth (Blogger API)
 GCP_CLIENT_ID = "168252551277-pruc3o3n7q11rqiv4adhqqcmg5ddnc91.apps.googleusercontent.com"
 GCP_CLIENT_SECRET = "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"
-GCP_REFRESH_TOKEN = "1//04DXVFdqqaMHMCgYIARAAGAQSNwF-L9IrrTFcVGfgkfQ4ZQuBwn8K9SAc62FW6bF8pf2_IlGS4bttq7V0loWbAgbTLLDs40F2bXg"
+GCP_REFRESH_TOKEN = "1//04M-XDwzNOR_yCgYIARAAGAQSNwF-L9IrJGENUaaf7XjgHTFJ7ZbjUOykM4FKOPXa4q4BuLqe2sBh-2cYRIa5f476ynPAD4-cLhQ"
 BLOG_ID = "4705513177871222706"
 
 # Kredensial Shopify
@@ -49,28 +49,9 @@ DAFTAR_MEREK_IDWX = {
 }
 
 # ==========================================
-# 2. DAFTAR URL UNTUK MASING-MASING MODE
+# 2. AUTENTIKASI OAUTH BLOGGER
 # ==========================================
-# Isi URL di dalam array di bawah ini sesuai dengan format postingannya
-DAFTAR_URL_NOTSYNC = [
-    # "https://www.dualtime.id/2026/10/for-sale-cartier-panthere-m-silver-dial.html",
-]
 
-DAFTAR_URL_TWP = [
-    # "https://www.dualtime.id/2026/10/for-sale-rolex-datejust-twp.html",
-]
-
-DAFTAR_URL_STUDIO = [
-    # "https://www.dualtime.id/2026/10/for-sale-rolex-datejust-31mm-twotone.html",
-]
-
-DAFTAR_URL_OWNER = [
-    # "https://www.dualtime.id/2026/09/for-sale-rolex-daytona-white-panda_01570651495.html",
-]
-
-# ==========================================
-# 3. AUTENTIKASI OAUTH BLOGGER
-# ==========================================
 def get_blogger_service():
     print("Memulai autentikasi Google Blogger API dengan Refresh Token...")
     creds = Credentials(
@@ -85,7 +66,7 @@ def get_blogger_service():
     return blogger_service
 
 # ==========================================
-# 4. FUNGSI API SHOPIFY & HELPER
+# 3. FUNGSI API SHOPIFY & HELPER
 # ==========================================
 def ensure_shopify_token(force_refresh=False):
     global SHOPIFY_ACCESS_TOKEN, SHOPIFY_TOKEN_EXPIRY, HEADERS_SHOPIFY
@@ -316,6 +297,120 @@ def ensure_shopify_metadata(force_resync=False):
         if new_handles:
             EXISTING_HANDLES = new_handles
 
+
+def reconcile_shopify_product_images(product_id, raw_image_urls, clean_title, max_retries=3):
+    """
+    Idempotent image reconciliation:
+    1. Mengambil daftar foto yang sudah tersimpan di produk Shopify.
+    2. Jika jumlah foto sudah sama atau lebih, lewati (idempotent).
+    3. Jika terdeteksi foto kurang (misal 6 dari 7), sistem mengidentifikasi foto
+       mana yang belum masuk dan mengunggahnya secara terisolasi ke endpoint
+       POST /admin/api/{version}/products/{id}/images.json.
+    """
+    ensure_shopify_token()
+    if not raw_image_urls or not product_id:
+        return
+
+    potongan_kata = clean_title.split()[:3]
+    alt_text_rapi = " ".join(potongan_kata).title()
+    nama_file_dasar = alt_text_rapi.replace(" ", "-")
+
+    url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products/{product_id}/images.json"
+    existing_images = []
+    try:
+        res = requests.get(url, headers=HEADERS_SHOPIFY, timeout=30)
+        if res.status_code == 200:
+            existing_images = res.json().get('images', [])
+        else:
+            print(f"   ⚠️ Gagal memeriksa foto di Shopify (HTTP {res.status_code}).")
+            return
+    except Exception as e:
+        print(f"   ⚠️ Error koneksi saat cek foto produk {product_id}: {e}")
+        return
+
+    total_expected = len(raw_image_urls)
+    total_existing = len(existing_images)
+
+    if total_existing >= total_expected:
+        print(f"   ✅ Integritas foto terverifikasi lengkap: {total_existing}/{total_expected} foto ada di Shopify.")
+        return
+
+    print(f"   ⚠️ Terdeteksi foto kurang di Shopify ({total_existing}/{total_expected}). Memulai rekonsiliasi foto...")
+
+    for i, raw_url in enumerate(raw_image_urls):
+        pos = i + 1
+        filename = f"{nama_file_dasar}-{pos}.jpg"
+        raw_basename = os.path.basename(urlparse(raw_url).path)
+
+        # Cek apakah foto ini sudah ada di Shopify
+        already_exists = False
+        for ex in existing_images:
+            src = ex.get('src', '')
+            if f"{nama_file_dasar}-{pos}" in src or (raw_basename and raw_basename in src):
+                already_exists = True
+                break
+
+        if already_exists:
+            continue
+
+        print(f"   ⏳ Mengunggah foto posisi {pos} yang belum masuk ({filename})...")
+        content_bytes = download_single_image(raw_url)
+        uploaded = False
+
+        # Jalur 1: Upload via Base64 attachment
+        if content_bytes:
+            img_b64 = base64.b64encode(content_bytes).decode('utf-8')
+            img_payload = {
+                "image": {
+                    "attachment": img_b64,
+                    "filename": filename,
+                    "position": pos,
+                    "alt": alt_text_rapi
+                }
+            }
+            for attempt in range(max_retries):
+                try:
+                    r_img = requests.post(url, headers=HEADERS_SHOPIFY, json=img_payload, timeout=45)
+                    if r_img.status_code in (200, 201):
+                        print(f"   ✅ Foto posisi {pos} BERHASIL ditambahkan via Base64!")
+                        uploaded = True
+                        break
+                    elif r_img.status_code == 401:
+                        ensure_shopify_token(force_refresh=True)
+                except Exception:
+                    time.sleep(2)
+
+        # Jalur 2: Fallback ke URL src direct jika Base64 gagal
+        if not uploaded:
+            print(f"   ⚠️ Mencoba upload foto posisi {pos} via direct URL...")
+            img_payload_src = {
+                "image": {
+                    "src": raw_url,
+                    "position": pos,
+                    "alt": alt_text_rapi
+                }
+            }
+            for attempt in range(max_retries):
+                try:
+                    r_src = requests.post(url, headers=HEADERS_SHOPIFY, json=img_payload_src, timeout=45)
+                    if r_src.status_code in (200, 201):
+                        print(f"   ✅ Foto posisi {pos} BERHASIL ditambahkan via direct URL!")
+                        uploaded = True
+                        break
+                    elif r_src.status_code == 401:
+                        ensure_shopify_token(force_refresh=True)
+                except Exception:
+                    time.sleep(2)
+
+    # Verifikasi akhir setelah rekonsiliasi
+    try:
+        final_res = requests.get(url, headers=HEADERS_SHOPIFY, timeout=30)
+        if final_res.status_code == 200:
+            final_count = len(final_res.json().get('images', []))
+            print(f"   📸 Rekonsiliasi selesai! Total foto sekarang di Shopify: {final_count}/{total_expected}")
+    except Exception:
+        pass
+
 # ==========================================
 # 5. FUNGSI PROSES UNTUK NOTSYNC
 # ==========================================
@@ -412,6 +507,8 @@ def process_notsync(blogger_service, urls):
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
             display_title = re.sub(rf"(?i)^({re.escape(matched_keyword)}|{re.escape(vendor)})\s*", "", clean_title).strip()
+
+
             custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
             print(f"   ✅ Data siap: {vendor} | SKU: {sku} | Harga: Rp {price} | Handle: {custom_handle}")
@@ -445,6 +542,9 @@ def process_notsync(blogger_service, urls):
                 new_id = prod_data['id']
                 graphql_product_id = f"gid://shopify/Product/{new_id}"
                 print(f"   🎉 Sukses diunggah! Product ID: {new_id}")
+
+                # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
+                reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
@@ -570,6 +670,8 @@ def process_twp(blogger_service, urls):
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
             display_title = re.sub(rf"(?i)^({re.escape(matched_keyword)}|{re.escape(vendor)})\s*", "", clean_title).strip()
+
+
             custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
             print(f"   ✅ Data siap: {vendor} | SKU: {sku} | Harga: Rp {price} | Handle: {custom_handle}")
@@ -603,6 +705,9 @@ def process_twp(blogger_service, urls):
                 new_id = prod_data['id']
                 graphql_product_id = f"gid://shopify/Product/{new_id}"
                 print(f"   🎉 Sukses diunggah! Product ID: {new_id}")
+
+                # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
+                reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
@@ -673,7 +778,6 @@ def process_photo_studio(blogger_service, urls):
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
             display_title_no_year = re.sub(rf"^{re.escape(vendor)}\s+", "", clean_title, flags=re.IGNORECASE).strip()
             short_display_title = f"{display_title_no_year} ({year})" if year else display_title_no_year
-            custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
             soup = BeautifulSoup(raw_html, 'html.parser')
 
@@ -699,6 +803,9 @@ def process_photo_studio(blogger_service, urls):
                 EXISTING_SKUS.add(sku)
                 owner_match = re.search(r'Code:\s*[\w\-\/]+\s*\((.*?)\)', body_text, re.IGNORECASE)
                 if owner_match: owner = owner_match.group(1).strip()
+
+
+            custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
             ref_match = re.search(r'Ref\.\s*([^\n]+)', body_text, re.IGNORECASE)
             if ref_match: reference = ref_match.group(1).strip()
@@ -772,6 +879,9 @@ def process_photo_studio(blogger_service, urls):
                 new_id = prod_data['id']
                 graphql_product_id = f"gid://shopify/Product/{new_id}"
                 print(f"   🎉 Sukses diunggah! Product ID: {new_id}")
+
+                # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
+                reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
 
                 if CATEGORY_ID:
                     requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }", "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}}, timeout=30)
@@ -915,17 +1025,20 @@ def process_photo_owner(blogger_service, urls):
             short_display_title = re.sub(rf"^{vendor}\s+", "", clean_title, flags=re.IGNORECASE).strip()
             if year: short_display_title = f"{short_display_title} ({year})"
 
-            custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
-
             raw_image_urls = extract_high_res_images(soup)
 
             image_urls, alt_text_rapi = prepare_image_payloads(raw_image_urls, clean_title)
 
-            sku = ""
+            sku, base_sku = "", ""
             sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
             if sku_match:
                 base_sku = sku_match.group(1)
                 sku = base_sku
+
+
+            custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
+
+            if base_sku:
                 if sku in EXISTING_SKUS:
                     counter = 1
                     while f"{base_sku}-{counter}" in EXISTING_SKUS: counter += 1
@@ -980,6 +1093,9 @@ def process_photo_owner(blogger_service, urls):
                 new_id = prod_data['id']
                 graphql_product_id = f"gid://shopify/Product/{new_id}"
                 print(f"   🎉 Sukses diunggah! Product ID: {new_id}")
+
+                # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
+                reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
@@ -1146,16 +1262,17 @@ def classify_and_process_url(blogger_service, url):
             return True # Dianggap sukses agar link masuk processed_urls
         
         is_ps = any('CONSIGNMENT_PS' in label.upper() or 'CONSINGMENT_PS' in label.upper() for label in labels)
+        is_featured = any('FEATURED' in label.upper() for label in labels)
         is_notsync = any('NOTSYNC' in label.upper() for label in labels)
         is_po = any('CONSIGNMENT_PO' in label.upper() or 'CONSINGMENT_PO' in label.upper() for label in labels)
         is_twp = any('TWP' in label.upper() for label in labels)
         
-        is_consignment_old = any('CONSIGNMENT' in label.upper() and not is_ps and not is_po for label in labels)
-        is_featured = any('FEATURED' in label.upper() for label in labels)
-        
         success_urls = []
         if is_ps:
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label CONSIGNMENT_PS)")
+            success_urls = process_photo_studio(blogger_service, [url])
+        elif is_featured:
+            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label FEATURED)")
             success_urls = process_photo_studio(blogger_service, [url])
         elif is_notsync:
             print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (berdasarkan label NOTSYNC)")
@@ -1164,25 +1281,14 @@ def classify_and_process_url(blogger_service, url):
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan label CONSIGNMENT_PO)")
             success_urls = process_photo_owner(blogger_service, [url])
         elif is_twp:
-            print(f"📌 {url} diklasifikasikan sebagai: TWP (berdasarkan label TWP)")
+            print(f"📌 {url} diklasifikasikan sebagai: TWP (The Watch Project - berdasarkan label TWP)")
             success_urls = process_twp(blogger_service, [url])
-        elif is_consignment_old or is_featured:
-            print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label Consignment/Featured lama)")
-            success_urls = process_photo_studio(blogger_service, [url])
         else:
-            raw_image_urls = extract_high_res_images(soup)
-                        
-            image_count = len(raw_image_urls)
-            
             if sku.startswith("CPO"):
-                if image_count == 1:
-                    print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (SKU {sku}, {image_count} Gambar)")
-                    success_urls = process_notsync(blogger_service, [url])
-                else:
-                    print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (SKU {sku}, {image_count} Gambar)")
-                    success_urls = process_photo_owner(blogger_service, [url])
+                print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan awalan SKU {sku})")
+                success_urls = process_photo_owner(blogger_service, [url])
             else:
-                print(f"⚠️ {url} tidak dapat diklasifikasikan otomatis (SKU '{sku}', bukan awalan CPO). Akan diproses default sebagai PHOTO STUDIO.")
+                print(f"⚠️ {url} tidak memiliki label format khusus (SKU '{sku}'). Akan diproses default sebagai PHOTO STUDIO.")
                 success_urls = process_photo_studio(blogger_service, [url])
                 
         if url in (success_urls or []):
@@ -1207,17 +1313,6 @@ if __name__ == "__main__":
     print("="*50)
     
     blogger_service = get_blogger_service()
-    
-    # Menjalankan proses sesuai URL manual (jika ada yang diisi di atas)
-    if DAFTAR_URL_NOTSYNC:
-        process_notsync(blogger_service, DAFTAR_URL_NOTSYNC)
-    if DAFTAR_URL_TWP:
-        process_twp(blogger_service, DAFTAR_URL_TWP)
-    if DAFTAR_URL_STUDIO:
-        process_photo_studio(blogger_service, DAFTAR_URL_STUDIO)
-    if DAFTAR_URL_OWNER:
-        process_photo_owner(blogger_service, DAFTAR_URL_OWNER)
-        
     print("\nMemasuki mode monitoring otomatis setiap 5 menit...")
     
     while True:

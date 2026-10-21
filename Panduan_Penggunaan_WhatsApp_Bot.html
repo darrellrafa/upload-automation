@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Panduan Penggunaan - WhatsApp Bot Otomasi History Foto Studio</title>
+<style>
+  @page {
+    size: A4;
+    margin: 16mm 16mm 16mm 16mm;
+    @bottom-right {
+      content: counter(page);
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1e293b;
+    line-height: 1.55;
+    font-size: 9pt;
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  /* Header */
+  .doc-header {
+    border-bottom: 2px solid #059669;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+
+  .badge {
+    display: inline-block;
+    background: #ecfdf5;
+    color: #047857;
+    font-size: 7.5pt;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid #a7f3d0;
+    margin-bottom: 6px;
+  }
+
+  h1 {
+    font-size: 18pt;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 4px 0 6px 0;
+    line-height: 1.25;
+  }
+
+  .doc-subtitle {
+    font-size: 9.5pt;
+    color: #475569;
+    margin: 0 0 8px 0;
+  }
+
+  .doc-meta {
+    display: flex;
+    gap: 14px;
+    font-size: 8pt;
+    color: #64748b;
+    border-top: 1px dashed #e2e8f0;
+    padding-top: 6px;
+  }
+
+  .doc-meta span strong {
+    color: #1e293b;
+  }
+
+  /* Headings */
+  h2 {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #0f172a;
+    border-bottom: 1.5px solid #e2e8f0;
+    padding-bottom: 4px;
+    margin-top: 14px;
+    margin-bottom: 8px;
+    page-break-after: avoid;
+  }
+
+  h3 {
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 10px;
+    margin-bottom: 4px;
+    page-break-after: avoid;
+  }
+
+  p {
+    margin: 0 0 6px 0;
+    text-align: justify;
+  }
+
+  ul, ol {
+    margin: 0 0 8px 0;
+    padding-left: 18px;
+  }
+
+  li {
+    margin-bottom: 3px;
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 12px 0;
+    font-size: 8pt;
+    page-break-inside: avoid;
+  }
+
+  th {
+    background: #f8fafc;
+    color: #0f172a;
+    font-weight: 700;
+    text-align: left;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+  }
+
+  td {
+    padding: 6px 8px;
+    border: 1px solid #e2e8f0;
+    vertical-align: top;
+  }
+
+  tr:nth-child(even) td {
+    background: #f8fafc;
+  }
+
+  /* Callout Boxes */
+  .callout {
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 8px 0;
+    font-size: 8.5pt;
+    page-break-inside: avoid;
+  }
+
+  .callout-wa {
+    background: #ecfdf5;
+    border-left: 4px solid #10b981;
+    color: #065f46;
+  }
+
+  .callout-info {
+    background: #eff6ff;
+    border-left: 4px solid #3b82f6;
+    color: #1e40af;
+  }
+
+  .callout-warning {
+    background: #fffbeb;
+    border-left: 4px solid #f59e0b;
+    color: #92400e;
+  }
+
+  .callout strong {
+    font-weight: 700;
+  }
+
+  /* Code Blocks */
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 7.5pt;
+    background: #f1f5f9;
+    color: #0f172a;
+    padding: 2px 4px;
+    border-radius: 4px;
+    border: 1px solid #e2e8f0;
+  }
+
+  pre {
+    background: #0f172a;
+    color: #f8fafc;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 7.5pt;
+    overflow-x: auto;
+    margin: 6px 0 8px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    line-height: 1.4;
+    page-break-inside: avoid;
+  }
+
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    border: none;
+  }
+
+  /* Cards Grid */
+  .card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 8px 0;
+  }
+
+  .card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px;
+    background: #f8fafc;
+    font-size: 7.5pt;
+  }
+
+  .card-title {
+    font-weight: 700;
+    font-size: 8.5pt;
+    color: #0f172a;
+    margin-bottom: 3px;
+  }
+
+  /* Workflow Steps */
+  .step-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0;
+  }
+
+  .step-item {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .step-num {
+    background: #059669;
+    color: white;
+    font-weight: 700;
+    font-size: 7.5pt;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .step-content {
+    flex-grow: 1;
+  }
+
+  .chip-draft {
+    display: inline-block;
+    background: #1d4ed8;
+    color: #ffffff;
+    font-size: 7.5pt;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 9999px;
+  }
+
+  .chip-publish {
+    display: inline-block;
+    background: #16a34a;
+    color: #ffffff;
+    font-size: 7.5pt;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 9999px;
+  }
+
+  .page-break {
+    page-break-after: always;
+  }
+
+  .footer-note {
+    font-size: 7pt;
+    color: #94a3b8;
+    text-align: center;
+    margin-top: 20px;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 5px;
+  }
+</style>
+</head>
+<body>
+
+  <!-- ==================== HALAMAN 1 ==================== -->
+  <div class="doc-header">
+    <div class="badge">Otomasi WhatsApp &bull; History Foto Studio</div>
+    <h1>Panduan Penggunaan WhatsApp Bot Otomasi Foto Studio</h1>
+    <div class="doc-subtitle">Otomasi Pencatatan Jam Masuk: WhatsApp Group &rarr; PythonAnywhere Webhook &rarr; Google Spreadsheet</div>
+    <div class="doc-meta">
+      <span><strong>Gateway:</strong> Green-API (WhatsApp Instance)</span>
+      <span><strong>Server Webhook:</strong> PythonAnywhere Flask (<code>tommyidwx</code>)</span>
+      <span><strong>Database:</strong> Google Spreadsheet (History Foto Studio)</span>
+      <span><strong>Pembaruan:</strong> Oktober 2026</span>
+    </div>
+  </div>
+
+  <h2>1. Ringkasan &amp; Latar Belakang Sistem</h2>
+  <p>
+    Sebelumnya, setiap jam tangan titipan yang baru tiba di kantor harus dicatat secara manual oleh admin dengan membaca pesan WhatsApp satu per satu dan menyalin data (tanggal, foto, caption, serial number) ke Google Spreadsheet <strong>History Foto Studio</strong>. Proses manual ini memakan waktu dan berisiko terjadi kesalahan ketik (*human error*).
+  </p>
+  <p>
+    Dengan sistem <strong>WhatsApp Bot Otomasi</strong> ini, siapa pun staf atau owner di grup WhatsApp cukup mengirimkan <strong>foto jam tangan</strong> dengan <strong>caption format standar</strong>. Dalam hitungan 2-3 detik, sistem otomatis mengekstrak informasi dan membuat baris baru di Spreadsheet dengan format rapi (termasuk foto dan <em>Dropdown Chip</em> biru <span class="chip-draft">On Draft</span>) secara otomatis dan hening (<em>Silent Mode</em> tanpa notifikasi balasan di grup).
+  </p>
+
+  <div class="callout callout-wa">
+    <strong>Siklus Otomasi End-to-End (Tertutup &amp; Terintegrasi):</strong><br>
+    1. <strong>Input Jam Datang:</strong> Staf kirim foto + caption di WA &rarr; Bot otomatis mencatat di Spreadsheet (Status: <code>On Draft</code>, Mode Hening).<br>
+    2. <strong>Proses Foto Studio &amp; Posting:</strong> Jam difoto di studio &rarr; Di-post ke Blogspot dengan label <code>CONSIGNMENT_PS</code> / <code>FEATURED</code>.<br>
+    3. <strong>Auto-Upload Shopify &amp; Status Publish:</strong> Script <code>upload_automation.py</code> mendeteksi artikel Blogspot &rarr; Upload ke Shopify &rarr; Status di Spreadsheet otomatis berubah menjadi <span class="chip-publish">Publish</span> via Webhook!
+  </div>
+
+  <h2>2. Format Standar Pesan WhatsApp (SOP Pengiriman)</h2>
+  <p>
+    Agar sistem dapat mendeteksi dan mengekstrak data dengan presisi 100%, pesan yang dikirimkan ke WhatsApp wajib memenuhi aturan berikut:
+  </p>
+
+  <div class="callout callout-info">
+    <strong>Format Penulisan Caption Wajib (Pemisah Garis Miring <code> / </code>):</strong><br>
+    <code>[Nama &amp; Spesifikasi Jam] / [Tahun/Bulan] / [Serial Number] / [Penitip / Toko / Notes]</code>
+  </div>
+
+  <h3>Contoh-Contoh Pesan Valid yang Sukses Teruji:</h3>
+  <ul>
+    <li><code>DJ28 2T Green Satin 10Diamon / 2019 / Z40904H3 / Omni</code></li>
+    <li><code>Pepsi jubilee / oct 2018 / U6159217 / pinjem box</code></li>
+    <li><code>Omega speedmaster ed white / JAN 2022 / 88702793 / Pak Said</code></li>
+    <li><code>Patek Philippe 5711 / 2020 / 1174015/2726257 / Pak Tommy</code> <em>(Format Patek <code>xxx/xxx</code> aman dibaca 1 nilai)</em></li>
+    <li><code>Rolex Submariner / 2021 / 123456789012345 / Toko Jam</code> <em>(Serial panjang hingga 24 karakter)</em></li>
+    <li><code>Rolex Explorer / 2020 / Omni</code> <em>(Tanpa Serial Number &rarr; Otomatis default <code>INPUT-MANUAL</code>)</em></li>
+  </ul>
+
+  <h3>Aturan Teknis Validasi Serial Number (Revisi Terbaru):</h3>
+  <ol>
+    <li><strong>Wajib Melampirkan Foto:</strong> Foto jam tangan harus dikirim bersamaan dengan caption (bisa 1 atau beberapa foto; foto pertama akan dijadikan gambar thumbnail di Spreadsheet).</li>
+    <li><strong>Pemisah Kolom:</strong> Sistem menggunakan garis miring dengan spasi (<code> / </code>) sebagai pemisah nama jam, tahun, serial, dan penitip.</li>
+    <li><strong>Fleksibilitas Panjang Serial (1 - 24 Karakter):</strong> Sistem kini mendukung serial number pendek hingga panjang (1 - 24 karakter alfanumerik) serta simbol strip (<code>-</code>).</li>
+    <li><strong>Dukungan Serial Patek Philippe (Format <code>xxx/xxx</code>):</strong> Serial number yang mengandung garis miring tanpa spasi (seperti <code>1174015/2726257</code>) aman dan tetap terbaca sebagai 1 serial number utuh tanpa terpotong.</li>
+    <li><strong>Default Value <code>INPUT-MANUAL</code>:</strong> Jika chat tidak menyertakan serial number (atau ditulis <em>"nyusul"</em> / <em>"belum ada SN"</em>), sistem otomatis menginput <code>INPUT-MANUAL</code> ke Spreadsheet agar admin dapat melengkapinya kemudian.</li>
+    <li><strong>Mode Hening (Silent Mode):</strong> Bot bekerja secara senyap di latar belakang tanpa mengirimkan pesan balasan/feedback ke grup WhatsApp agar obrolan grup tetap rapi dan tidak terganggu.</li>
+    <li><strong>Obrolan Biasa Aman dari Spam:</strong> Chat obrolan santai tanpa foto (seperti <em>"Oke siap mas"</em>, <em>"Jam sudah sampai"</em>) otomatis <strong>diabaikan</strong> dan tidak akan masuk ke Spreadsheet.</li>
+  </ol>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== HALAMAN 2 ==================== -->
+  <h2>3. Pemetaan Data ke Kolom Spreadsheet History Foto Studio</h2>
+  <p>
+    Setiap pesan WhatsApp yang valid akan langsung diterjemahkan menjadi 1 baris baru pada tab <strong>"History Foto Studio"</strong> dengan rincian pemetaan kolom sebagai berikut:
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 8%;">Kolom</th>
+        <th style="width: 24%;">Nama Kolom Spreadsheet</th>
+        <th style="width: 38%;">Sumber Data &amp; Cara Pengolahan</th>
+        <th style="width: 30%;">Contoh Hasil di Spreadsheet</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>A</strong></td>
+        <td><strong>Date Datang Ke Office</strong></td>
+        <td>Dibuat otomatis oleh script sesuai tanggal pesan diterima dalam format Bahasa Indonesia (WIB).</td>
+        <td><code>Selasa, 20 Oktober 2026</code></td>
+      </tr>
+      <tr>
+        <td><strong>B</strong></td>
+        <td><strong>Image</strong></td>
+        <td>Foto jam tangan otomatis diunduh dan disimpan <strong>permanen selamanya</strong> ke Google Drive (folder <em>"Arsip Foto Studio WA"</em>), lalu disisipkan ke sel menggunakan rumus formula <code>=IMAGE("url_drive")</code>.</td>
+        <td><em>Thumbnail foto permanen Google Drive</em></td>
+      </tr>
+      <tr>
+        <td><strong>C</strong></td>
+        <td><strong>Name in Creative</strong></td>
+        <td>Teks caption lengkap persis seperti yang diketikkan di WhatsApp.</td>
+        <td><code>DJ28 2T Green Satin 10Diamon / 2019 / Z40904H3 / Omni</code></td>
+      </tr>
+      <tr>
+        <td><strong>D</strong></td>
+        <td><strong>Serial Number</strong></td>
+        <td>Diekstrak otomatis dari caption oleh algoritma Regex cerdas.</td>
+        <td><code>Z40904H3</code></td>
+      </tr>
+      <tr>
+        <td><strong>E</strong></td>
+        <td><strong>Status</strong></td>
+        <td>Disalin otomatis dari baris atasnya berupa <strong>Dropdown Chip Biru</strong> resmi Google Sheets.</td>
+        <td><span class="chip-draft">On Draft ▾</span></td>
+      </tr>
+      <tr>
+        <td><strong>F</strong></td>
+        <td><strong>Notes</strong></td>
+        <td>Mencatat otomatis identitas pengirim pesan WhatsApp.</td>
+        <td><code>Diinput oleh: darrell r...</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>4. Arsitektur Komponen &amp; Alur Data</h2>
+  <div class="step-container">
+    <div class="step-item">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <strong>Pengirim (Staf / Owner di WhatsApp):</strong> Mengirim foto jam tangan dengan format caption bergaris miring (<code>/</code>) ke Grup WhatsApp Foto Studio.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <strong>Gateway WhatsApp (Green-API):</strong> Menerima pesan di WhatsApp, mengunggah foto ke CDN terproteksi, lalu mengirimkan notifikasi Webhook JSON ke server PythonAnywhere.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <strong>Server Webhook (PythonAnywhere Flask):</strong>
+        Memvalidasi pesan (memastikan berasal dari grup target dan memuat foto), mengekstrak tanggal, caption, dan Serial Number, lalu mengirimkan payload terstruktur ke Google Apps Script.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <strong>Google Apps Script &amp; Spreadsheet:</strong>
+        Menambahkan baris baru di sheet <em>History Foto Studio</em>, menyalin aturan Dropdown Chip Biru dan format tinggi baris dari baris atasnya, lalu mengembalikan status sukses.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">5</div>
+      <div class="step-content">
+        <strong>Auto-Update oleh <code>upload_automation.py</code> (Tahap Akhir):</strong>
+        Saat jam tangan tayang di Blogspot, script otomatis harian mendeteksi Serial Number yang sama dan otomatis mengubah status di Kolom E dari <span class="chip-draft">On Draft</span> menjadi <span class="chip-publish">Publish</span>.
+      </div>
+    </div>
+  </div>
+
+  <h2>5. Konfigurasi Teknis Sistem (Maintenance Guide)</h2>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-title">A. Green-API Console</div>
+      <ul style="padding-left: 12px; margin-bottom: 0;">
+        <li><strong>Status Instance:</strong> <code>authorized</code> (nomor WA terhubung).</li>
+        <li><strong>Webhook URL:</strong> <code>https://tommyidwx.pythonanywhere.com/wa-webhook</code></li>
+        <li><strong>Format:</strong> <code>JSON</code>.</li>
+        <li><strong>Saklar Wajib:</strong> <em>Receive webhooks on incoming messages and files</em> &rarr; <strong>ON (Hijau)</strong>.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-title">B. PythonAnywhere Web App</div>
+      <ul style="padding-left: 12px; margin-bottom: 0;">
+        <li><strong>File Script:</strong> <code>/home/tommyidwx/mysite/flask_app.py</code></li>
+        <li><strong>Endpoint:</strong> <code>POST /wa-webhook</code></li>
+        <li><strong>Filter Grup:</strong> Variabel <code>TARGET_GROUP_ID</code> dapat diisi ID grup WhatsApp jika ingin membatasi hanya grup tertentu.</li>
+        <li><strong>Reload:</strong> Lakukan reload di tab <strong>Web</strong> jika ada pengeditan kode.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== HALAMAN 3 ==================== -->
+  <h2>6. Kode Sumber Resmi Sistem (Reference Code)</h2>
+
+  <h3>A. Script Google Apps Script (Di Spreadsheet History Foto Studio)</h3>
+  <pre><code>function getOrCreateFolder(folderName) {
+  var folders = DriveApp.getFoldersByName(folderName);
+  if (folders.hasNext()) return folders.next();
+  return DriveApp.createFolder(folderName);
+}
+
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("History Foto Studio");
+    if (!sheet) return ContentService.createTextOutput(JSON.stringify({"status": "error"})).setMimeType(ContentService.MimeType.JSON);
+
+    // 1. UPDATE STATUS JADI 'Publish' (Dari upload_automation.py)
+    if (payload.sheet_name === "PHOTO STUDIO" && payload.sku) {
+      var data = sheet.getDataRange().getValues();
+      var skuDicari = payload.sku.toString().trim().toLowerCase();
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][3].toString().trim().toLowerCase() === skuDicari) {
+          if (payload.status) sheet.getRange(i + 1, 5).setValue(payload.status);
+          return ContentService.createTextOutput(JSON.stringify({"status": "success", "row": i + 1})).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+    }
+
+    // 2. INPUT BARIS BARU 'On Draft' DENGAN ARSIP PERMANEN GOOGLE DRIVE
+    if (payload.action === "insert_draft") {
+      var formulaImage = "";
+      if (payload.image_url) {
+        try {
+          var folder = getOrCreateFolder("Arsip Foto Studio WA");
+          var blob = UrlFetchApp.fetch(payload.image_url).getBlob();
+          var timeStr = Utilities.formatDate(new Date(), "GMT+7", "yyyyMMdd_HHmmss");
+          var fileName = (payload.serial_number || "NO-SN") + "_" + timeStr + ".jpg";
+          blob.setName(fileName);
+          var driveFile = folder.createFile(blob);
+          driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          var permanentUrl = "https://lh3.googleusercontent.com/d/" + driveFile.getId();
+          formulaImage = '=IMAGE("' + permanentUrl + '")';
+        } catch (imgErr) {
+          formulaImage = '=IMAGE("' + payload.image_url + '")';
+        }
+      }
+
+      sheet.appendRow([payload.tanggal, formulaImage, payload.name_in_creative, payload.serial_number, "On Draft", payload.notes]);
+
+      var newRow = sheet.getLastRow();
+      var prevRow = newRow - 1;
+      if (prevRow >= 2) {
+        var prevRange = sheet.getRange(prevRow, 1, 1, 6);
+        var newRange = sheet.getRange(newRow, 1, 1, 6);
+        prevRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+        prevRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
+        sheet.setRowHeight(newRow, sheet.getRowHeight(prevRow));
+      }
+      sheet.getRange(newRow, 5).setValue("On Draft");
+      return ContentService.createTextOutput(JSON.stringify({"status": "success", "row": newRow})).setMimeType(ContentService.MimeType.JSON);
+    }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": err.toString()})).setMimeType(ContentService.MimeType.JSON);
+  }
+}</code></pre>
+
+  <h3>B. Script Logika Ekstraksi Serial Number (flask_app.py di PythonAnywhere)</h3>
+  <pre><code>def parse_parts(caption):
+    # Memisahkan caption dengan aman tanpa memotong serial Patek (format xxx/xxx)
+    if re.search(r'\s+/\s*|\s*/\s+', caption):
+        return [p.strip() for p in re.split(r'\s+/\s*|\s*/\s+', caption) if p.strip()]
+    else:
+        protected = re.sub(r'(\b\d{5,9})/(\d{5,9}\b)', r'\1__SLASH__\2', caption)
+        return [p.replace('__SLASH__', '/').strip() for p in protected.split('/') if p.strip()]
+
+def ekstraksi_serial_number(caption):
+    if not caption:
+        return "INPUT-MANUAL"
+    parts = parse_parts(caption)
+    candidates = []
+    for idx, part in enumerate(parts):
+        clean = part.strip()
+        if ' ' in clean or any(bw in clean.lower() for bw in BLACKLIST_WORDS):
+            continue
+        if MONTH_YEAR_REGEX.search(clean) and not ('/' in clean and len(clean) >= 10):
+            continue
+        if re.match(r'^[A-Za-z0-9/-]{1,24}$', clean):
+            score = 10 + (20 if idx == 2 else 0) + (30 if '/' in clean else 0)
+            if re.search(r'[A-Za-z]', clean) and re.search(r'[0-9]', clean):
+                score += 15
+            candidates.append((score, clean.upper()))
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+    return "INPUT-MANUAL"</code></pre>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== HALAMAN 4 ==================== -->
+  <h2>7. Panduan Pemecahan Masalah (Troubleshooting)</h2>
+
+  <h3>1. Foto atau Data Tidak Masuk ke Spreadsheet Saat Chat Dikirim</h3>
+  <div class="callout callout-warning">
+    <strong>Langkah Pengecekan:</strong>
+    <ol style="margin-top: 4px; margin-bottom: 0;">
+      <li>Pastikan status instance di dashboard <strong>Green-API</strong> berstatus <strong>`authorized`</strong> (ikon hijau). Jika logout, scan ulang QR code.</li>
+      <li>Periksa bagian <strong>Webhooks</strong> di Green-API: pastikan toggle <em>Receive webhooks on incoming messages and files</em> dalam keadaan <strong>ON (Hijau)</strong> dan URL sudah benar (<code>https://tommyidwx.pythonanywhere.com/wa-webhook</code>).</li>
+      <li>Buka tab <strong>Web</strong> di PythonAnywhere &rarr; klik link <strong>Server log</strong> untuk memeriksa apakah paket data WhatsApp masuk dan berhasil di-forward (HTTP 200).</li>
+    </ol>
+  </div>
+
+  <h3>2. Kolom Status Berupa Teks Biasa (Bukan Dropdown Chip Biru)</h3>
+  <div class="callout callout-info">
+    <strong>Solusi:</strong> Pastikan di Google Apps Script Anda telah melakukan <strong>Deploy &rarr; Manage deployments &rarr; Edit (✏️) &rarr; Version: New version &rarr; Deploy</strong>. Fitur penyalinan Dropdown Chip baru akan aktif pada versi script terbaru.
+  </div>
+
+  <h3>3. Cara Mengetahui atau Membatasi ID Grup WhatsApp (<code>TARGET_GROUP_ID</code>)</h3>
+  <p>
+    Jika di masa depan Anda ingin membatasi agar bot HANYA merespons satu grup tertentu:
+  </p>
+  <ol>
+    <li>Kirim satu pesan apa saja di grup WhatsApp target Anda.</li>
+    <li>Buka tab <strong>Web</strong> di PythonAnywhere &rarr; buka <strong>Server log</strong>.</li>
+    <li>Cari baris yang bertuliskan: <code>📡 Event Chat ID: 120363xxxxxx@g.us</code>.</li>
+    <li>Salin kode tersebut dan masukkan ke variabel <code>TARGET_GROUP_ID = "120363xxxxxx@g.us"</code> pada file <code>flask_app.py</code>, lalu klik <strong>Save</strong> dan <strong>Reload</strong> web app.</li>
+  </ol>
+
+  <div class="footer-note">
+    Dokumen Panduan Teknis &bull; WhatsApp Bot &bull; Dualtime IDWX Upload Automation &bull; Disusun untuk Tim Operasional
+  </div>
+
+</body>
+</html>
