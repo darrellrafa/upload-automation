@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Panduan Penggunaan - Upload Automation Dualtime IDWX</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 18mm 16mm;
+    @bottom-right {
+      content: counter(page);
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1e293b;
+    line-height: 1.55;
+    font-size: 9.5pt;
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  /* Cover / Header */
+  .doc-header {
+    border-bottom: 2px solid #2563eb;
+    padding-bottom: 14px;
+    margin-bottom: 20px;
+  }
+
+  .badge {
+    display: inline-block;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-size: 8pt;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid #bfdbfe;
+    margin-bottom: 8px;
+  }
+
+  h1 {
+    font-size: 19pt;
+    font-weight: 800;
+    color: #0f172a;
+    margin: 4px 0 6px 0;
+    line-height: 1.25;
+  }
+
+  .doc-subtitle {
+    font-size: 10pt;
+    color: #475569;
+    margin: 0 0 10px 0;
+  }
+
+  .doc-meta {
+    display: flex;
+    gap: 16px;
+    font-size: 8.5pt;
+    color: #64748b;
+    border-top: 1px dashed #e2e8f0;
+    padding-top: 8px;
+  }
+
+  .doc-meta span strong {
+    color: #1e293b;
+  }
+
+  /* Headings */
+  h2 {
+    font-size: 12pt;
+    font-weight: 700;
+    color: #0f172a;
+    border-bottom: 1.5px solid #e2e8f0;
+    padding-bottom: 4px;
+    margin-top: 18px;
+    margin-bottom: 10px;
+    page-break-after: avoid;
+  }
+
+  h3 {
+    font-size: 10pt;
+    font-weight: 700;
+    color: #1e293b;
+    margin-top: 12px;
+    margin-bottom: 5px;
+    page-break-after: avoid;
+  }
+
+  p {
+    margin: 0 0 8px 0;
+    text-align: justify;
+  }
+
+  /* Lists */
+  ul, ol {
+    margin: 0 0 10px 0;
+    padding-left: 20px;
+  }
+
+  li {
+    margin-bottom: 4px;
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 14px 0;
+    font-size: 8.5pt;
+    page-break-inside: avoid;
+  }
+
+  th {
+    background: #f1f5f9;
+    color: #0f172a;
+    text-align: left;
+    font-weight: 700;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+  }
+
+  td {
+    padding: 7px 10px;
+    border: 1px solid #e2e8f0;
+    vertical-align: top;
+  }
+
+  tr:nth-child(even) td {
+    background: #f8fafc;
+  }
+
+  /* Callout Boxes */
+  .callout {
+    padding: 9px 12px;
+    border-radius: 6px;
+    margin: 10px 0;
+    font-size: 8.8pt;
+    page-break-inside: avoid;
+  }
+
+  .callout-info {
+    background: #eff6ff;
+    border-left: 4px solid #3b82f6;
+    color: #1e40af;
+  }
+
+  .callout-warning {
+    background: #fffbeb;
+    border-left: 4px solid #f59e0b;
+    color: #92400e;
+  }
+
+  .callout-success {
+    background: #f0fdf4;
+    border-left: 4px solid #22c55e;
+    color: #166534;
+  }
+
+  .callout strong {
+    font-weight: 700;
+  }
+
+  /* Code Blocks */
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 8pt;
+    background: #f1f5f9;
+    color: #0f172a;
+    padding: 2px 4px;
+    border-radius: 4px;
+    border: 1px solid #e2e8f0;
+  }
+
+  pre {
+    background: #0f172a;
+    color: #f8fafc;
+    padding: 9px 12px;
+    border-radius: 6px;
+    font-size: 8pt;
+    overflow-x: auto;
+    margin: 8px 0 10px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    line-height: 1.45;
+    page-break-inside: avoid;
+  }
+
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    border: none;
+  }
+
+  /* Workflow steps */
+  .step-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 10px 0;
+  }
+
+  .step-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  .step-num {
+    background: #2563eb;
+    color: white;
+    font-weight: 700;
+    font-size: 8pt;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .step-content {
+    flex-grow: 1;
+  }
+
+  .step-content strong {
+    color: #0f172a;
+  }
+
+  /* Page Break */
+  .page-break {
+    page-break-after: always;
+  }
+
+  .footer-note {
+    font-size: 7.5pt;
+    color: #94a3b8;
+    text-align: center;
+    margin-top: 24px;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 6px;
+  }
+</style>
+</head>
+<body>
+
+  <!-- ==================== HALAMAN 1 ==================== -->
+  <div class="doc-header">
+    <div class="badge">Dokumentasi Resmi & Panduan Teknis</div>
+    <h1>Panduan Penggunaan Sistem Upload Automation</h1>
+    <div class="doc-subtitle">Otomasi Sinkronisasi Produk: Google Blogger (Dualtime ID) &rarr; Shopify Store (IDWX) &amp; Google Sheets</div>
+    <div class="doc-meta">
+      <span><strong>File Utama:</strong> <code>upload_automation.py</code></span>
+      <span><strong>Platform Eksekusi:</strong> PythonAnywhere (Always-on Task)</span>
+      <span><strong>Versi API:</strong> Shopify 2025-01 / Blogger v3</span>
+      <span><strong>Pembaruan:</strong> Oktober 2026</span>
+    </div>
+  </div>
+
+  <h2>1. Ringkasan &amp; Arsitektur Sistem</h2>
+  <p>
+    Sistem <strong>Upload Automation</strong> dirancang untuk memantau artikel penjualan jam tangan baru di blog <strong>dualtime.id (Google Blogger)</strong> secara berkala, mengekstraksi metadata penting (Merek, Judul, SKU, Harga, Tahun, Spesifikasi, Kondisi, Foto High-Resolution), lalu mengunggahnya secara otomatis menjadi produk siap jual di <strong>Shopify Store (IDWX)</strong> serta mencatat laporannya ke <strong>Google Sheets</strong> via Webhooks.
+  </p>
+
+  <div class="callout callout-info">
+    <strong>Alur Eksekusi Otomatis (Setiap 5 Menit):</strong><br>
+    Blogger API &rarr; Filter Postingan Baru WIB &rarr; Klasifikasi Kategori &rarr; Ekstraksi Gambar &amp; Metadata &rarr; Upload Shopify &rarr; <strong>Auto-Reconcile Foto</strong> &rarr; Update Status Webhook Sheets &rarr; Catat ke <code>processed_urls.json</code>.
+  </div>
+
+  <h2>2. Logika Klasifikasi Otomatis Format Postingan</h2>
+  <p>
+    Setiap artikel blogspot yang terdeteksi akan diperiksa label dan formatnya untuk menentukan perlakuan upload yang tepat:
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 20%;">Format / Tipe</th>
+        <th style="width: 30%;">Kriteria Deteksi (Blogger)</th>
+        <th style="width: 25%;">Perlakuan Shopify</th>
+        <th style="width: 25%;">Integrasi Sheets</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>PHOTO STUDIO</strong></td>
+        <td>Label memuat <code>CONSIGNMENT_PS</code></td>
+        <td>Tags: <code>__label2:Consignment</code>, <code>TitipIDWX</code>, Gender Tag (<code>Men</code>/<code>Ladies</code>). Lokasi: Blok M Plaza</td>
+        <td>Update status <em>Publish</em> di Spreadsheet Foto Studio via Webhook.</td>
+      </tr>
+      <tr>
+        <td><strong>FEATURED</strong></td>
+        <td>Label memuat <code>FEATURED</code></td>
+        <td>Tags: <strong>Hanya Gender Tag</strong> (<code>Men</code>/<code>Ladies</code>). Lokasi: Blok M Plaza</td>
+        <td>Kirim data produk ke Spreadsheet Slow Moving.</td>
+      </tr>
+      <tr>
+        <td><strong>PHOTO OWNER</strong></td>
+        <td>Label memuat <code>CONSIGNMENT_PO</code> (atau awalan SKU <code>CPO</code>). <em>Foto bisa 1 atau lebih.</em></td>
+        <td>Tags: <code>TitipOwner</code>. Lokasi stok: <code>OWNER (S)</code>.</td>
+        <td>Mencentang kolom <em>WEB</em> di Spreadsheet Owner via Webhook.</td>
+      </tr>
+      <tr>
+        <td><strong>NOTSYNC</strong></td>
+        <td>Label memuat <code>NOTSYNC</code>. <em>Foto bisa 1 atau lebih.</em></td>
+        <td>Tags: <code>NotSync</code>. Stok lokasi: Blok M Plaza.</td>
+        <td>Tidak memicu webhook eksternal.</td>
+      </tr>
+      <tr>
+        <td><strong>TWP</strong></td>
+        <td>Label memuat <code>TWP</code> (The Watch Project)</td>
+        <td>Tags: <code>SG</code>. Stok lokasi: Blok M Plaza.</td>
+        <td>Tidak memicu webhook eksternal.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== HALAMAN 2 ==================== -->
+  <h2>3. Fitur Unggulan &amp; Keandalan Sistem</h2>
+
+  <div class="step-container">
+    <div class="step-item">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <strong>Anti-Gagal Download Foto (Multi-Resolution Fallback):</strong>
+        Sistem mendownload foto dengan User-Agent browser modern dan mencoba fallback resolusi bertingkat (<code>/s0/</code> &rarr; <code>/s2000/</code> &rarr; <code>/s1600/</code> &rarr; <code>/w1600/</code>). Jika unduhan lokal di server mengalami kendala, sistem otomatis mengalihkan payload ke link <code>src</code> langsung ke CDN Shopify agar tidak ada foto yang terlewat.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <strong>Rekonsiliasi Foto Seketika (Auto-Reconcile):</strong>
+        Tepat setelah produk berstatus HTTP 201 (Created), sistem langsung memverifikasi jumlah foto di Shopify. Jika ditemukan foto yang kurang (misal 6 dari 7), foto yang hilang diunggah ulang secara terisolasi via <code>Product ID</code> numerik seketika.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <strong>Auto-Refresh Token Shopify:</strong>
+        Token akses Shopify disegarkan otomatis sebelum expired (tersisa &lt; 10 menit) dan memiliki fitur auto-refresh seketika jika mendeteksi respons 401 Unauthorized, menjamin proses berjalan tanpa henti selama 24 jam.
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <strong>Manajemen SKU &amp; Handle Anti-Bentrok:</strong>
+        Sistem menjaga keunikan SKU dan URL handle Shopify. Jika kode barang pernah dipakai sebelumnya di Shopify (misal barang konsinyasi lama), sistem otomatis memberikan penomoran unik (<code>-1</code>, <code>-2</code>, dst.) tanpa mengganggu data artikel Blogspot.
+      </div>
+    </div>
+  </div>
+
+  <h2>4. Panduan Menjalankan Sistem</h2>
+
+  <h3>A. Mode Otomatis 24 Jam (PythonAnywhere Always-on Task)</h3>
+  <p>
+    Mode ini adalah metode standar harian. Script akan terus memantau blogspot setiap 5 menit.
+  </p>
+  <ol>
+    <li>Login ke akun <a href="https://www.pythonanywhere.com">PythonAnywhere</a> Anda.</li>
+    <li>Masuk ke tab <strong>Tasks</strong> &rarr; bagian <strong>Always-on tasks</strong>.</li>
+    <li>Pastikan perintah yang dimasukkan adalah:
+      <pre><code>python3.10 /home/username/upload_automation.py</code></pre>
+    </li>
+    <li>Jika script sedang berjalan normal, Anda dapat melihat log real-time dengan mengklik ikon kertas (log file) di sebelah kanan task.</li>
+  </ol>
+
+  <h3>B. Mode Manual / Target URL Tertentu (Menggunakan Google Colab)</h3>
+  <p>
+    File <code>upload_automation.py</code> dikhususkan 100% berjalan otomatis 24 jam via Google Blogger API. Jika Anda memiliki postingan tertentu atau artikel masa lalu yang ingin di-upload secara manual on-demand, gunakan <strong>4 File Script Notebook (.ipynb) di Google Colab</strong>:
+  </p>
+  <ul>
+    <li><code>auto_upload_photo_studio_(google_oauth).ipynb</code> &rarr; Untuk format Photo Studio &amp; Featured.</li>
+    <li><code>auto_upload_photo_owner_(google_oauth).ipynb</code> &rarr; Untuk format Photo Owner (CPO).</li>
+    <li><code>upload_otomasi_format_notsync_(google_oauth).ipynb</code> &rarr; Untuk format NotSync.</li>
+    <li><code>auto_upload_twp_(google_oauth).ipynb</code> &rarr; Untuk format TWP (The Watch Project).</li>
+  </ul>
+  <p>
+    Panduan lengkap langkah demi langkah pengoperasian di Google Colab tersedia pada dokumen terpisah: <strong>Panduan_Penggunaan_Google_Colab.pdf</strong>.
+  </p>
+
+  <div class="page-break"></div>
+
+  <!-- ==================== HALAMAN 3 ==================== -->
+  <h2>5. Memahami File Pelacak Status (Cache JSON)</h2>
+  <p>
+    Script menggunakan 2 file JSON lokal untuk memastikan tidak ada artikel yang ter-upload ganda:
+  </p>
+  <ul>
+    <li>
+      <code>processed_urls.json</code>:
+      Menyimpan seluruh URL artikel blogspot yang sudah sukses ter-upload. Selama link ada di file ini, script tidak akan memproses ulang artikel tersebut.
+    </li>
+    <li>
+      <code>processed_skus.json</code>:
+      Menyimpan daftar SKU yang diproses pada hari ini untuk mencegah postingan ganda di hari yang sama.
+    </li>
+  </ul>
+
+  <h2>6. Panduan Pemecahan Masalah (Troubleshooting)</h2>
+
+  <h3>1. Error: <code>invalid_grant: Token has been expired or revoked</code></h3>
+  <div class="callout callout-success">
+    <strong>Status Saat Ini (Sudah Teratasi):</strong> Aplikasi Google Cloud Console Anda saat ini sudah berstatus <strong>In Production</strong> dan Refresh Token yang terpasang bersifat <strong>permanen</strong> (tidak akan expired 7 hari lagi).
+  </div>
+  <p><em>Langkah di bawah ini hanya sebagai panduan darurat jika di masa mendatang token sengaja dicabut (revoked) dari Google Account Security atau jika Anda mengganti akun project Google:</em></p>
+  <ol>
+    <li>Buka <strong>Google Cloud Console</strong> &rarr; pilih project &rarr; menu <strong>Audience</strong> (pastikan tetap <em>In Production</em>).</li>
+    <li>Buka <strong>Google OAuth 2.0 Playground</strong> (<code>developers.google.com/oauthplayground</code>).</li>
+    <li>Klik ikon ⚙️ <strong>Gear</strong> di kanan atas &rarr; centang <em>Use your own OAuth credentials</em> &rarr; masukkan <code>GCP_CLIENT_ID</code> dan <code>GCP_CLIENT_SECRET</code> Anda.</li>
+    <li>Di Step 1, pilih scope <code>https://www.googleapis.com/auth/blogger</code> &rarr; klik <strong>Authorize APIs</strong> &rarr; login dan izinkan.</li>
+    <li>Di Step 2, klik <strong>Exchange authorization code for tokens</strong> &rarr; salin <strong>Refresh token</strong> yang baru.</li>
+    <li>Ganti nilai <code>GCP_REFRESH_TOKEN</code> pada script <code>upload_automation.py</code> atau file notebook.</li>
+  </ol>
+
+  <h3>2. Kenapa SKU di Shopify Bertambah Akhiran <code>-1</code> atau <code>-2</code>?</h3>
+  <div class="callout callout-info">
+    <strong>Penjelasan:</strong> Teks di Blogspot tidak pernah diubah oleh script. Akhiran <code>-1</code> atau <code>-2</code> hanya ditambahkan pada produk Shopify karena kode SKU tersebut sudah pernah terdaftar di inventaris Shopify (misalnya barang konsinyasi lama dengan kode serupa). Ini fitur keamanan agar data inventaris di Shopify tidak saling menimpa.
+  </div>
+
+  <h3>3. Cara Restart Task Bersih di PythonAnywhere</h3>
+  <p>
+    Jika task mengalami error tak terduga dan perlu di-refresh:
+  </p>
+  <ol>
+    <li>Buka tab <strong>Tasks</strong> di PythonAnywhere.</li>
+    <li>Klik tombol <strong>Pause</strong> lalu <strong>Resume</strong> (atau tombol Stop / Start).</li>
+    <li>Periksa log task melalui tombol <em>View task log</em> untuk memastikan pesan:
+      <code>Mendownload database SKU dan Handle dari Shopify...</code> dan <code>Autentikasi Google berhasil tanpa perlu login!</code> sudah muncul.
+    </li>
+  </ol>
+
+    <div class="page-break"></div>
+
+  <h3>4. Merek (Vendor) Salah Terdeteksi / Belum Terdaftar di Shopify</h3>
+  <div class="callout callout-warning">
+    <strong>Tanda &amp; Penyebab:</strong> Jika suatu produk berhasil ter-upload namun merek (vendor)-nya salah (misalnya hanya mengambil kata pertama dari judul atau menjadi <code>Unknown</code>), kemungkinan terbesarnya adalah merek jam tangan tersebut <strong>belum terdaftar di dalam dictionary <code>DAFTAR_MEREK_IDWX</code></strong> pada script.
+  </div>
+  <p><strong>Langkah Penanganan:</strong></p>
+  <ol>
+    <li>
+      <strong>Tambahkan Merek Baru ke dalam Script:</strong>
+      Buka file <code>upload_automation.py</code> (baris 41) pada bagian <code>DAFTAR_MEREK_IDWX</code>, lalu tambahkan merek baru tersebut mengikuti format:
+      <pre><code>DAFTAR_MEREK_IDWX = {
+    # Format: "KEYWORD_HURUF_KAPITAL": "Format Nama Resmi Vendor",
+    "GIRARD PERREGAUX": "Girard-Perregaux",
+    "ORIS": "Oris",
+    "HAMILTON": "Hamilton",
+    ...
+}</code></pre>
+      <ul>
+        <li><strong>Bagian Kiri (Key):</strong> Wajib ditulis dalam <strong>HURUF KAPITAL / BESAR</strong> seluruhnya, karena sistem mencocokkannya menggunakan perbandingan huruf besar.</li>
+        <li><strong>Bagian Kanan (Value):</strong> Ditulis dengan format nama resmi yang rapi sesuai tampilan yang Anda inginkan di kolom <em>Vendor</em> Shopify.</li>
+      </ul>
+    </li>
+    <li>
+      <strong>Update Manual Produk yang Sudah Terlanjur Ter-upload di Shopify:</strong>
+      <div class="callout callout-info">
+        <strong>Penting:</strong> Penambahan merek di script hanya berlaku untuk proses upload berikutnya. Untuk produk yang <strong>sudah terlanjur di-upload ke Shopify dengan merek yang keliru</strong>, Anda perlu mengoreksinya secara manual langsung di Shopify:
+        <ol style="margin-top: 4px; margin-bottom: 0;">
+          <li>Buka <strong>Shopify Admin</strong> &rarr; pilih menu <strong>Products</strong>.</li>
+          <li>Cari dan klik produk yang mereknya salah.</li>
+          <li>Pada panel sebelah kanan (bagian <em>Product organization</em>), ubah kolom <strong>Vendor</strong> ke nama merek yang benar.</li>
+          <li>Klik tombol <strong>Save</strong> di pojok kanan atas.</li>
+        </ol>
+      </div>
+    </li>
+  </ol>
+
+  <div class="footer-note">
+    Dokumen Panduan Teknis &bull; Dualtime IDWX Upload Automation &bull; Disusun untuk Tim Operasional &amp; Developer
+  </div>
+
+</body>
+</html>
