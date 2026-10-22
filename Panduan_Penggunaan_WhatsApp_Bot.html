@@ -480,6 +480,36 @@
   return DriveApp.createFolder(folderName);
 }
 
+// =============================================================================
+// PEMBUAT GARIS HIJAU PEMISAH HARIAN (OTOMATIS TIAP JAM 12 MALAM)
+// =============================================================================
+function buatGarisHijauHarian() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("History Foto Studio");
+  if (!sheet) return;
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var greenColor = "#34A853"; // Warna hijau pemisah
+  var lastColor = sheet.getRange(lastRow, 1).getBackground();
+
+  // Hindari duplikasi jika baris terakhir sudah berwarna hijau
+  if (lastColor.toLowerCase() === greenColor.toLowerCase()) {
+    return;
+  }
+
+  // Sisipkan baris baru di bawah baris terakhir data (AMAN: tidak akan menimpa data terakhir)
+  var targetRow = lastRow + 1;
+  sheet.insertRowAfter(lastRow);
+
+  var range = sheet.getRange(targetRow, 1, 1, 6);
+  range.clearContent();
+  range.clearDataValidations();
+  range.clearFormat();
+  range.setBackground(greenColor);
+  sheet.setRowHeight(targetRow, 22); // Tinggi baris ramping
+}
+
 function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
@@ -520,14 +550,26 @@ function doPost(e) {
       sheet.appendRow([payload.tanggal, formulaImage, payload.name_in_creative, payload.serial_number, "On Draft", payload.notes]);
 
       var newRow = sheet.getLastRow();
-      var prevRow = newRow - 1;
-      if (prevRow >= 2) {
-        var prevRange = sheet.getRange(prevRow, 1, 1, 6);
+
+      // Cari baris data valid di atasnya (lewati baris hijau pemisah)
+      var formatRow = -1;
+      for (var r = newRow - 1; r >= 2; r--) {
+        var bg = sheet.getRange(r, 1).getBackground().toLowerCase();
+        if (bg !== "#34a853" && bg !== "#27ae60" && bg !== "#2e7d32") {
+          formatRow = r;
+          break;
+        }
+      }
+
+      if (formatRow >= 2) {
+        var prevRange = sheet.getRange(formatRow, 1, 1, 6);
         var newRange = sheet.getRange(newRow, 1, 1, 6);
         prevRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
         prevRange.copyTo(newRange, SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
-        sheet.setRowHeight(newRow, sheet.getRowHeight(prevRow));
+        newRange.setBackground(null); // Pastikan latar belakang putih bersih
+        sheet.setRowHeight(newRow, sheet.getRowHeight(formatRow));
       }
+
       sheet.getRange(newRow, 5).setValue("On Draft");
       return ContentService.createTextOutput(JSON.stringify({"status": "success", "row": newRow})).setMimeType(ContentService.MimeType.JSON);
     }
