@@ -331,23 +331,22 @@
 
   <h3>Contoh-Contoh Pesan Valid yang Sukses Teruji:</h3>
   <ul>
+    <li><code>RM 11-03 / 443 / Tommy, foto ekspress</code> <em>(Serial pendek <code>443</code> berhasil terdeteksi, bukan 'Tommy')</em></li>
+    <li><code>Pp nautilus 5976/1G / 7090129 / tommy, foto ekspress</code> <em>(Serial Patek <code>7090129</code> terdeteksi akurat)</em></li>
     <li><code>DJ28 2T Green Satin 10Diamon / 2019 / Z40904H3 / Omni</code></li>
     <li><code>Pepsi jubilee / oct 2018 / U6159217 / pinjem box</code></li>
-    <li><code>Omega speedmaster ed white / JAN 2022 / 88702793 / Pak Said</code></li>
     <li><code>Patek Philippe 5711 / 2020 / 1174015/2726257 / Pak Tommy</code> <em>(Format Patek <code>xxx/xxx</code> aman dibaca 1 nilai)</em></li>
-    <li><code>Rolex Submariner / 2021 / 123456789012345 / Toko Jam</code> <em>(Serial panjang hingga 24 karakter)</em></li>
     <li><code>Rolex Explorer / 2020 / Omni</code> <em>(Tanpa Serial Number &rarr; Otomatis default <code>INPUT-MANUAL</code>)</em></li>
   </ul>
 
   <h3>Aturan Teknis Validasi Serial Number (Revisi Terbaru):</h3>
   <ol>
     <li><strong>Wajib Melampirkan Foto:</strong> Foto jam tangan harus dikirim bersamaan dengan caption (bisa 1 atau beberapa foto; foto pertama akan dijadikan gambar thumbnail di Spreadsheet).</li>
-    <li><strong>Pemisah Kolom:</strong> Sistem menggunakan garis miring dengan spasi (<code> / </code>) sebagai pemisah nama jam, tahun, serial, dan penitip.</li>
-    <li><strong>Fleksibilitas Panjang Serial (1 - 24 Karakter):</strong> Sistem kini mendukung serial number pendek hingga panjang (1 - 24 karakter alfanumerik) serta simbol strip (<code>-</code>).</li>
+    <li><strong>Wajib Memuat Angka (Anti Nama Orang):</strong> Serial number wajib memuat setidaknya satu angka/digit. Nama orang atau staf (seperti <em>"Tommy"</em>, <em>"Reinhard"</em>, <em>"Christian"</em>) yang murni huruf otomatis <strong>diabaikan dan tidak akan keliru menjadi serial number</strong>.</li>
+    <li><strong>Fleksibilitas Panjang Serial (1 - 24 Karakter):</strong> Mendukung serial number pendek (seperti nomor edisi Richard Mille <code>443</code>) hingga nomor seri panjang (hingga 24 karakter alfanumerik) serta simbol strip (<code>-</code>).</li>
     <li><strong>Dukungan Serial Patek Philippe (Format <code>xxx/xxx</code>):</strong> Serial number yang mengandung garis miring tanpa spasi (seperti <code>1174015/2726257</code>) aman dan tetap terbaca sebagai 1 serial number utuh tanpa terpotong.</li>
     <li><strong>Default Value <code>INPUT-MANUAL</code>:</strong> Jika chat tidak menyertakan serial number (atau ditulis <em>"nyusul"</em> / <em>"belum ada SN"</em>), sistem otomatis menginput <code>INPUT-MANUAL</code> ke Spreadsheet agar admin dapat melengkapinya kemudian.</li>
     <li><strong>Mode Hening (Silent Mode):</strong> Bot bekerja secara senyap di latar belakang tanpa mengirimkan pesan balasan/feedback ke grup WhatsApp agar obrolan grup tetap rapi dan tidak terganggu.</li>
-    <li><strong>Obrolan Biasa Aman dari Spam:</strong> Chat obrolan santai tanpa foto (seperti <em>"Oke siap mas"</em>, <em>"Jam sudah sampai"</em>) otomatis <strong>diabaikan</strong> dan tidak akan masuk ke Spreadsheet.</li>
   </ol>
 
   <div class="page-break"></div>
@@ -591,18 +590,42 @@ def ekstraksi_serial_number(caption):
     if not caption:
         return "INPUT-MANUAL"
     parts = parse_parts(caption)
+    if len(parts) <= 1:
+        return "INPUT-MANUAL"
+
     candidates = []
-    for idx, part in enumerate(parts):
-        clean = part.strip()
-        if ' ' in clean or any(bw in clean.lower() for bw in BLACKLIST_WORDS):
-            continue
-        if MONTH_YEAR_REGEX.search(clean) and not ('/' in clean and len(clean) >= 10):
-            continue
-        if re.match(r'^[A-Za-z0-9/-]{1,24}$', clean):
-            score = 10 + (20 if idx == 2 else 0) + (30 if '/' in clean else 0)
-            if re.search(r'[A-Za-z]', clean) and re.search(r'[0-9]', clean):
-                score += 15
-            candidates.append((score, clean.upper()))
+    # Evaluasi part index 1 ke atas (part 0 adalah model jam)
+    for idx in range(1, len(parts)):
+        raw_part = parts[idx].strip()
+        chunks = [raw_part]
+        if ',' in raw_part:
+            chunks.append(raw_part.split(',')[0].strip())
+
+        for chunk in chunks:
+            clean = chunk.strip()
+            if not clean:
+                continue
+
+            # 1. Serial number WAJIB memiliki angka (digit). Nama seperti 'Tommy' langsung diabaikan
+            if not re.search(r'\d', clean):
+                continue
+            if any(bw in clean.lower() for bw in BLACKLIST_WORDS):
+                continue
+            if re.fullmatch(r'(19|20)\d{2}', clean): # Abaikan tahun 4 digit
+                continue
+            if MONTH_REGEX.search(clean) and re.search(r'\b(19|20)\d{2}\b', clean):
+                continue
+            if ' ' in clean:
+                continue
+
+            if re.match(r'^[A-Za-z0-9/-]{1,24}$', clean):
+                score = 10
+                if '/' in clean: score += 40
+                if re.search(r'[A-Za-z]', clean) and re.search(r'[0-9]', clean): score += 25
+                elif re.fullmatch(r'\d+', clean): score += 20
+                if (len(parts) == 4 and idx == 2) or (len(parts) == 3 and idx == 1): score += 15
+                candidates.append((score, clean.upper()))
+
     if candidates:
         candidates.sort(key=lambda x: x[0], reverse=True)
         return candidates[0][1]
