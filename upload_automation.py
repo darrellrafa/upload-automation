@@ -22,16 +22,16 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 # 1. KONFIGURASI KREDENSIAL GOOGLE & SHOPIFY
 # ==========================================
 # Kredensial Google OAuth (Blogger API)
-GCP_CLIENT_ID = os.getenv("GCP_CLIENT_ID")
-GCP_CLIENT_SECRET = os.getenv("GCP_CLIENT_SECRET")
-GCP_REFRESH_TOKEN = os.getenv("GCP_REFRESH_TOKEN")
-BLOG_ID = os.getenv("BLOG_ID")
+GCP_CLIENT_ID = "168252551277-pruc3o3n7q11rqiv4adhqqcmg5ddnc91.apps.googleusercontent.com"
+GCP_CLIENT_SECRET = "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"
+GCP_REFRESH_TOKEN = "1//04MP0xgNbI0EpCgYIARAAGAQSNwF-L9IrwCGdwybH6Hw44-3uAHPRUFNGqyXrl0tNOs3jwtoXaeYMv36oXU_ByXDVlf2ixzzb3ec"
+BLOG_ID = "4705513177871222706"
 
 # Kredensial Shopify
-SHOPIFY_STORE_NAME = os.getenv("SHOPIFY_STORE_NAME", "idwx")
+SHOPIFY_STORE_NAME = "idwx"
 API_VERSION = "2025-01"
-SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID")
-SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET")
+SHOPIFY_CLIENT_ID = "39e6bd92b726c60b440a4d4c0555f935"
+SHOPIFY_CLIENT_SECRET = "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"
 
 # URL Webhook (Apps Script)
 GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyjPvY_dHnz54fhmzEvSOIJJCDyyWOASeaBMcdOkcMxpftXfTHcqPf2/exec"
