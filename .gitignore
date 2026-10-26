@@ -1,1 +1,8 @@
-.env.example
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+temp_videos/
