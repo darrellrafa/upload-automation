@@ -13,8 +13,10 @@ WIB = timezone(timedelta(hours=7))
 from urllib.parse import urlparse
 
 # Library Google API dengan metode Refresh Token
+import io
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 # ==========================================
 # 1. KONFIGURASI KREDENSIAL GOOGLE & SHOPIFY
@@ -22,7 +24,7 @@ from googleapiclient.discovery import build
 # Kredensial Google OAuth (Blogger API)
 GCP_CLIENT_ID = "168252551277-pruc3o3n7q11rqiv4adhqqcmg5ddnc91.apps.googleusercontent.com"
 GCP_CLIENT_SECRET = "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"
-GCP_REFRESH_TOKEN = "1//04M-XDwzNOR_yCgYIARAAGAQSNwF-L9IrJGENUaaf7XjgHTFJ7ZbjUOykM4FKOPXa4q4BuLqe2sBh-2cYRIa5f476ynPAD4-cLhQ"
+GCP_REFRESH_TOKEN = "1//04MP0xgNbI0EpCgYIARAAGAQSNwF-L9IrwCGdwybH6Hw44-3uAHPRUFNGqyXrl0tNOs3jwtoXaeYMv36oXU_ByXDVlf2ixzzb3ec"
 BLOG_ID = "4705513177871222706"
 
 # Kredensial Shopify
@@ -49,21 +51,47 @@ DAFTAR_MEREK_IDWX = {
 }
 
 # ==========================================
-# 2. AUTENTIKASI OAUTH BLOGGER
+# 2. AUTENTIKASI OAUTH GOOGLE (BLOGGER, DRIVE, YOUTUBE)
 # ==========================================
 
-def get_blogger_service():
-    print("Memulai autentikasi Google Blogger API dengan Refresh Token...")
-    creds = Credentials(
+def get_google_credentials():
+    return Credentials(
         token=None,
         refresh_token=GCP_REFRESH_TOKEN,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=GCP_CLIENT_ID,
         client_secret=GCP_CLIENT_SECRET
     )
+
+def get_blogger_service():
+    print("Memulai autentikasi Google Blogger API dengan Refresh Token...")
+    creds = get_google_credentials()
     blogger_service = build('blogger', 'v3', credentials=creds)
-    print("✅ Autentikasi Google berhasil tanpa perlu login!")
+    print("✅ Autentikasi Google Blogger berhasil!")
     return blogger_service
+
+def get_drive_service():
+    creds = get_google_credentials()
+    return build('drive', 'v3', credentials=creds)
+
+def get_youtube_service():
+    creds = get_google_credentials()
+    return build('youtube', 'v3', credentials=creds)
+
+# Konfigurasi Otomasi YouTube Shorts & Google Drive
+YOUTUBE_SUBFOLDER_NAME = "youtube"
+YOUTUBE_DESCRIPTION_TEMPLATE = """🔹 IDWX - Your Trusted Luxury Timepiece Destination 🔹
+
+🌐 Website:
+🔗 https://idwx.co
+
+📞 Contact:
+📩 Email: idwxofficial@gmail.com
+📱 WhatsApp: +62 819-0959-9009
+
+#idwx #jamtanganmewah #luxurywatch #youtubeshorts"""
+
+QUEUE_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pending_youtube_queue.json")
 
 # ==========================================
 # 3. FUNGSI API SHOPIFY & HELPER
@@ -956,6 +984,27 @@ def process_photo_studio(blogger_service, urls):
                 except Exception as e:
                     print(f"   ⚠️ Error Webhook History Foto Studio: {e}")
 
+                # 4. Cek Link Google Drive Assets & Masukkan ke Antrean YouTube Video
+                try:
+                    gdrive_folder_id = extract_gdrive_folder_id(raw_html)
+                    if gdrive_folder_id:
+                        yt_title = format_youtube_title(raw_title, vendor)
+                        print(f"   🎬 Link GDrive Assets terdeteksi ({gdrive_folder_id}). Menambahkan ke antrean YouTube...")
+                        add_to_youtube_queue({
+                            "shopify_product_id": new_id,
+                            "shopify_handle": custom_handle,
+                            "blogger_title": raw_title,
+                            "yt_title": yt_title,
+                            "vendor": vendor,
+                            "gdrive_folder_id": gdrive_folder_id,
+                            "post_url": url,
+                            "status": "pending",
+                            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                            "check_count": 0
+                        })
+                except Exception as e:
+                    print(f"   ⚠️ Error saat menambahkan ke antrean YouTube: {e}")
+
                 success_urls.append(url)
             else:
                 print(f"   ❌ Gagal mengunggah. Error: {shopify_res.text}")
@@ -1305,7 +1354,261 @@ def classify_and_process_url(blogger_service, url):
         return False
 
 # ==========================================
-# 9. PROGRAM UTAMA
+# 9. OTOMASI YOUTUBE SHORTS & GOOGLE DRIVE QUEUE
+# ==========================================
+
+def format_youtube_title(raw_title, vendor="Unknown"):
+    """
+    Format judul YouTube:
+    1. Hapus awalan [FOR SALE]
+    2. Hapus nama brand/vendor di awal judul
+    3. Batasi panjang total maks 100 karakter (tanpa tagar #shorts)
+    """
+    clean = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', raw_title, flags=re.IGNORECASE).strip()
+    
+    if vendor and vendor != "Unknown":
+        clean = re.sub(rf"^{re.escape(vendor)}\s+", "", clean, flags=re.IGNORECASE).strip()
+    else:
+        for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
+            if clean.upper().startswith(keyword):
+                clean = clean[len(keyword):].strip()
+                break
+                
+    if len(clean) > 100:
+        clean = clean[:97].strip() + "..."
+    return clean
+
+def extract_gdrive_folder_id(html_content):
+    """Mengekstrak ID folder Google Drive dari link Assets di isi postingan."""
+    match = re.search(r'drive\.google\.com/drive/(?:u/\d+/)?folders/([a-zA-Z0-9_-]+)', html_content)
+    return match.group(1) if match else None
+
+def check_drive_for_youtube_video(drive_service, parent_folder_id, subfolder_name=YOUTUBE_SUBFOLDER_NAME):
+    """
+    Mencari sub-folder bernama subfolder_name (case-insensitive) di dalam parent_folder_id,
+    lalu mencari file video (.mp4, .mov, dll) di dalam subfolder tersebut.
+    """
+    try:
+        query_folder = f"'{parent_folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        res_folder = drive_service.files().list(q=query_folder, fields="files(id, name)").execute()
+        subfolders = res_folder.get('files', [])
+        
+        target_folder_id = None
+        for sf in subfolders:
+            if sf.get('name', '').strip().lower() == subfolder_name.lower():
+                target_folder_id = sf.get('id')
+                break
+                
+        if not target_folder_id:
+            return None # Subfolder belum dibuat oleh videographer
+            
+        query_video = f"'{target_folder_id}' in parents and trashed = false"
+        res_video = drive_service.files().list(q=query_video, fields="files(id, name, mimeType, size)").execute()
+        files = res_video.get('files', [])
+        
+        for f in files:
+            mime = f.get('mimeType', '').lower()
+            name = f.get('name', '').lower()
+            if 'video' in mime or name.endswith(('.mp4', '.mov', '.avi', '.m4v', '.webm')):
+                return {
+                    "file_id": f.get('id'),
+                    "file_name": f.get('name'),
+                    "mime_type": f.get('mimeType'),
+                    "size": f.get('size'),
+                    "folder_id": target_folder_id
+                }
+        return None # Subfolder ada tapi file video belum dimasukkan
+    except Exception as e:
+        print(f"   ⚠️ Error cek Google Drive ({parent_folder_id}): {e}")
+        return None
+
+def download_drive_file(drive_service, file_id, dest_path):
+    """Download file dari Google Drive ke disk lokal secara bertahap."""
+    request = drive_service.files().get_media(fileId=file_id)
+    with io.FileIO(dest_path, 'wb') as fh:
+        downloader = MediaIoBaseDownload(fh, request, chunksize=10*1024*1024)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            if status:
+                print(f"      ⬇️ Progress download video: {int(status.progress() * 100)}%")
+    return True
+
+def upload_video_to_youtube(youtube_service, file_path, title, description=YOUTUBE_DESCRIPTION_TEMPLATE):
+    """Unggah file video lokal ke YouTube sebagai Shorts Unlisted."""
+    body = {
+        'snippet': {
+            'title': title,
+            'description': description,
+            'tags': ['idwx', 'jamtanganmewah', 'luxurywatch', 'shorts', 'youtubeshorts'],
+            'categoryId': '26' # Howto & Style
+        },
+        'status': {
+            'privacyStatus': 'unlisted',
+            'selfDeclaredMadeForKids': False
+        }
+    }
+    
+    media = MediaFileUpload(file_path, chunksize=10*1024*1024, resumable=True)
+    request = youtube_service.videos().insert(
+        part=','.join(body.keys()),
+        body=body,
+        media_body=media
+    )
+    
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"      ⬆️ Progress upload YouTube: {int(status.progress() * 100)}%")
+            
+    video_id = response.get('id')
+    return video_id
+
+def inject_youtube_embed_to_shopify(product_id, video_id):
+    """
+    Update body_html produk Shopify: mengganti placeholder video xxxx 
+    dengan embed player iframe YouTube Shorts aktif yang responsif.
+    """
+    ensure_shopify_token()
+    get_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products/{product_id}.json"
+    res_get = requests.get(get_url, headers=HEADERS_SHOPIFY, timeout=30)
+    if res_get.status_code != 200:
+        print(f"   ⚠️ Gagal mengambil produk Shopify ID {product_id} (Status: {res_get.status_code})")
+        return False
+        
+    current_body = res_get.json().get('product', {}).get('body_html', '') or ''
+    
+    youtube_iframe_html = f'''<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%;">
+<iframe src="https://www.youtube.com/embed/{video_id}?feature=share" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" frameborder="0" allowfullscreen></iframe>
+</div>'''
+    
+    placeholder_pattern = r'<!--\s*<div[^>]*>.*?https://www.youtube.com/embed/xxxx.*?</div>\s*-->'
+    if re.search(placeholder_pattern, current_body, re.DOTALL):
+        updated_body = re.sub(placeholder_pattern, youtube_iframe_html, current_body, flags=re.DOTALL)
+    else:
+        if f"youtube.com/embed/{video_id}" in current_body:
+            print(f"   ℹ️ Video YouTube {video_id} sudah terpasang di Shopify ID {product_id}.")
+            return True
+        updated_body = current_body.strip() + "\n" + youtube_iframe_html
+        
+    update_payload = {
+        "product": {
+            "id": product_id,
+            "body_html": updated_body
+        }
+    }
+    put_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products/{product_id}.json"
+    res_put = requests.put(put_url, headers=HEADERS_SHOPIFY, json=update_payload, timeout=30)
+    if res_put.status_code == 200:
+        print(f"   🎉 Berhasil memasang embed YouTube ({video_id}) ke produk Shopify ID {product_id}!")
+        return True
+    else:
+        print(f"   ⚠️ Gagal update embed YouTube di Shopify: {res_put.status_code} - {res_put.text}")
+        return False
+
+def load_youtube_queue():
+    if not os.path.exists(QUEUE_FILE_PATH):
+        return []
+    try:
+        with open(QUEUE_FILE_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_youtube_queue(queue):
+    try:
+        with open(QUEUE_FILE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(queue, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"   ⚠️ Gagal menyimpan {QUEUE_FILE_PATH}: {e}")
+
+def add_to_youtube_queue(item_data):
+    queue = load_youtube_queue()
+    for q in queue:
+        if q.get('shopify_product_id') == item_data.get('shopify_product_id'):
+            return
+        if q.get('post_url') and q.get('post_url') == item_data.get('post_url'):
+            return
+    queue.append(item_data)
+    save_youtube_queue(queue)
+    print(f"   📥 Ditambahkan ke antrean YouTube: '{item_data.get('yt_title')}' (Status: Menunggu video di Drive)")
+
+def process_pending_youtube_queue():
+    queue = load_youtube_queue()
+    pending_items = [item for item in queue if item.get('status') == 'pending']
+    
+    if not pending_items:
+        return
+        
+    print(f"\n🎬 Memeriksa {len(pending_items)} item di antrean video YouTube...")
+    drive_service = None
+    youtube_service = None
+    
+    temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_videos")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    for item in pending_items:
+        gdrive_folder_id = item.get('gdrive_folder_id')
+        prod_id = item.get('shopify_product_id')
+        yt_title = item.get('yt_title')
+        
+        if not gdrive_folder_id or not prod_id:
+            item['status'] = 'invalid'
+            continue
+            
+        print(f"   🔍 Cek folder Drive ({gdrive_folder_id}) untuk: {yt_title}")
+        
+        if drive_service is None:
+            drive_service = get_drive_service()
+            
+        video_info = check_drive_for_youtube_video(drive_service, gdrive_folder_id)
+        if not video_info:
+            item['check_count'] = item.get('check_count', 0) + 1
+            item['last_checked'] = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"      ⏳ Video di sub-folder '{YOUTUBE_SUBFOLDER_NAME}' belum tersedia. (Pengecekan ke-{item['check_count']})")
+            continue
+            
+        file_id = video_info['file_id']
+        file_name = video_info['file_name']
+        print(f"      🎥 Video DITEMUKAN: {file_name} (ID: {file_id})")
+        
+        temp_file_path = os.path.join(temp_dir, f"{prod_id}_{file_name}")
+        try:
+            print(f"      ⬇️ Mendownload video dari Google Drive...")
+            download_drive_file(drive_service, file_id, temp_file_path)
+            
+            if youtube_service is None:
+                youtube_service = get_youtube_service()
+                
+            print(f"      ⬆️ Mengunggah ke YouTube Shorts (Unlisted): '{yt_title}'...")
+            video_id = upload_video_to_youtube(youtube_service, temp_file_path, yt_title)
+            print(f"      🎉 Video berhasil terunggah ke YouTube! Video ID: {video_id}")
+            
+            print(f"      🔗 Memasang embed video ke Shopify Product ID {prod_id}...")
+            inject_youtube_embed_to_shopify(prod_id, video_id)
+            
+            item['status'] = 'completed'
+            item['youtube_video_id'] = video_id
+            item['youtube_url'] = f"https://youtu.be/{video_id}"
+            item['completed_at'] = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
+            save_youtube_queue(queue)
+            print(f"      ✅ Selesai! Antrean untuk '{yt_title}' ditandai COMPLETED.")
+            
+        except Exception as e:
+            print(f"      ❌ Error saat memproses video {file_name}: {e}")
+            item['last_error'] = str(e)
+        finally:
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception:
+                    pass
+                    
+    save_youtube_queue(queue)
+
+# ==========================================
+# 10. PROGRAM UTAMA
 # ==========================================
 if __name__ == "__main__":
     print("="*50)
@@ -1350,6 +1653,12 @@ if __name__ == "__main__":
                         processed_urls.add(link)
                         save_processed_urls(processed_urls)
                         
+            # Cek dan proses antrean video YouTube yang tertunda
+            try:
+                process_pending_youtube_queue()
+            except Exception as e:
+                print(f"⚠️ Error saat memproses antrean YouTube: {e}")
+
             print("Menunggu 5 menit sebelum pengecekan berikutnya...")
             time.sleep(300)
             

@@ -502,10 +502,11 @@ function buatGarisHijauHarian() {
   sheet.insertRowAfter(lastRow);
 
   var range = sheet.getRange(targetRow, 1, 1, 6);
-  range.clearContent();
   range.clearDataValidations();
   range.clearFormat();
   range.setBackground(greenColor);
+  range.setValue("---");
+  range.setFontColor(greenColor); // Teks tersembunyi agar baris dianggap terisi konten
   sheet.setRowHeight(targetRow, 22); // Tinggi baris ramping
 }
 
@@ -546,15 +547,40 @@ function doPost(e) {
         }
       }
 
-      sheet.appendRow([payload.tanggal, formulaImage, payload.name_in_creative, payload.serial_number, "On Draft", payload.notes]);
+      // Tentukan letak baris baru secara AMAN (Lewati garis hijau pemisah)
+      var lastDataRow = sheet.getLastRow();
+      var targetRow = lastDataRow + 1;
 
-      var newRow = sheet.getLastRow();
+      while (targetRow <= sheet.getMaxRows()) {
+        var bg = sheet.getRange(targetRow, 1).getBackground().toLowerCase();
+        if (bg === "#34a853" || bg === "#27ae60" || bg === "#2e7d32") {
+          targetRow++; // Lewati baris hijau!
+        } else {
+          break;
+        }
+      }
+
+      if (targetRow > sheet.getMaxRows()) {
+        sheet.insertRowAfter(sheet.getMaxRows());
+      }
+
+      // Tulis data di baris targetRow (tidak menimpa garis hijau)
+      sheet.getRange(targetRow, 1, 1, 6).setValues([[
+        payload.tanggal,
+        formulaImage,
+        payload.name_in_creative,
+        payload.serial_number,
+        "On Draft",
+        payload.notes
+      ]]);
+
+      var newRow = targetRow;
 
       // Cari baris data valid di atasnya (lewati baris hijau pemisah)
       var formatRow = -1;
       for (var r = newRow - 1; r >= 2; r--) {
-        var bg = sheet.getRange(r, 1).getBackground().toLowerCase();
-        if (bg !== "#34a853" && bg !== "#27ae60" && bg !== "#2e7d32") {
+        var bgFormat = sheet.getRange(r, 1).getBackground().toLowerCase();
+        if (bgFormat !== "#34a853" && bgFormat !== "#27ae60" && bgFormat !== "#2e7d32") {
           formatRow = r;
           break;
         }
