@@ -22,16 +22,16 @@ from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 # 1. KONFIGURASI KREDENSIAL GOOGLE & SHOPIFY
 # ==========================================
 # Kredensial Google OAuth (Blogger API)
-GCP_CLIENT_ID = "your_google_client_id.apps.googleusercontent.com"
-GCP_CLIENT_SECRET = "your_google_client_secret"
-GCP_REFRESH_TOKEN = "your_google_refresh_token"
-BLOG_ID = "your_blogger_blog_id"
+GCP_CLIENT_ID = os.getenv("GCP_CLIENT_ID")
+GCP_CLIENT_SECRET = os.getenv("GCP_CLIENT_SECRET")
+GCP_REFRESH_TOKEN = os.getenv("GCP_REFRESH_TOKEN")
+BLOG_ID = os.getenv("BLOG_ID")
 
 # Kredensial Shopify
-SHOPIFY_STORE_NAME = "idwx"
+SHOPIFY_STORE_NAME = os.getenv("SHOPIFY_STORE_NAME", "your_shopify_store_name")
 API_VERSION = "2025-01"
-SHOPIFY_CLIENT_ID = "your_shopify_client_id"
-SHOPIFY_CLIENT_SECRET = "your_shopify_client_secret"
+SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID")
+SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET")
 
 # URL Webhook (Apps Script)
 GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/your_apps_script_url/exec"
