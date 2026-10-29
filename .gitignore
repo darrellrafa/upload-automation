@@ -6,4 +6,6 @@ __pycache__/
 *.pyo
 .ipynb_checkpoints/
 temp_videos/
+bin/
+audio_tracks/
 .env.example
