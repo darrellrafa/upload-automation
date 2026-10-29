@@ -6,6 +6,9 @@ import time
 import sys
 import base64
 import json
+import subprocess
+import shutil
+import random
 from datetime import datetime, timezone, timedelta
 
 # Definisikan Zona Waktu WIB (UTC+7)
@@ -19,10 +22,28 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 
+def load_env_file(filepath=".env"):
+    """Membaca file .env lokal jika ada dan memuatnya ke os.environ"""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filepath)
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+
+load_env_file()
+
+
 def get_required_env(name):
     value = os.getenv(name)
     if value is None or value == "":
-        raise RuntimeError(f"Environment variable '{name}' is not set.")
+        raise RuntimeError(f"Environment variable '{name}' is not set. Pastikan sudah didefinisikan di file .env atau environment sistem.")
     return value
 
 
@@ -88,6 +109,8 @@ def get_youtube_service():
 
 # Konfigurasi Otomasi YouTube Shorts & Google Drive
 YOUTUBE_SUBFOLDER_NAME = "youtube"
+DRIVE_AUDIO_FOLDER_ID = os.getenv("DRIVE_AUDIO_FOLDER_ID", "1NO7JUz7kOzyjiKLqkZKJD18Tw0CSIB2K")
+LOCAL_AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio_tracks")
 YOUTUBE_DESCRIPTION_TEMPLATE = """🔹 IDWX - Your Trusted Luxury Timepiece Destination 🔹
 
 🌐 Website:
@@ -1442,6 +1465,111 @@ def download_drive_file(drive_service, file_id, dest_path):
                 print(f"      ⬇️ Progress download video: {int(status.progress() * 100)}%")
     return True
 
+def get_ffmpeg_path():
+    """Mencari path binary ffmpeg yang valid dan dapat dieksekusi di OS saat ini (Mac/Linux)."""
+    # 1. Cek system PATH terlebih dahulu (di Linux / PythonAnywhere biasanya /usr/bin/ffmpeg)
+    sys_bin = shutil.which("ffmpeg")
+    if sys_bin:
+        try:
+            subprocess.run([sys_bin, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            return sys_bin
+        except Exception:
+            pass
+
+    # 2. Cek binary lokal bin/ffmpeg (misal di Mac lokal)
+    local_bin = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", "ffmpeg")
+    if os.path.exists(local_bin) and os.access(local_bin, os.X_OK):
+        try:
+            subprocess.run([local_bin, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            return local_bin
+        except Exception:
+            pass
+
+    # 3. Cek library imageio_ffmpeg jika tersedia
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+
+    return None
+
+def sync_audio_tracks_from_drive(drive_service):
+    """Mengunduh file audio (.mp3) dari Google Drive folder jika lokal kosong."""
+    os.makedirs(LOCAL_AUDIO_DIR, exist_ok=True)
+    existing = [f for f in os.listdir(LOCAL_AUDIO_DIR) if f.lower().endswith(('.mp3', '.m4a', '.wav'))]
+    if existing:
+        return existing
+    print(f"   🎵 Folder audio lokal kosong. Mengunduh daftar BGM dari Google Drive...")
+    try:
+        query = f"'{DRIVE_AUDIO_FOLDER_ID}' in parents and trashed = false"
+        res = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+        files = res.get('files', [])
+        for f in files:
+            name = f.get('name')
+            if name and name.lower().endswith(('.mp3', '.m4a', '.wav')):
+                dest = os.path.join(LOCAL_AUDIO_DIR, name)
+                print(f"      ⬇️ Mengunduh BGM: {name}...")
+                download_drive_file(drive_service, f.get('id'), dest)
+        return [f for f in os.listdir(LOCAL_AUDIO_DIR) if f.lower().endswith(('.mp3', '.m4a', '.wav'))]
+    except Exception as e:
+        print(f"   ⚠️ Gagal sinkronisasi audio dari Google Drive: {e}")
+        return []
+
+def get_random_audio_track(drive_service=None):
+    """Memilih satu lagu BGM secara acak dari library audio lokal."""
+    os.makedirs(LOCAL_AUDIO_DIR, exist_ok=True)
+    audio_files = [
+        os.path.join(LOCAL_AUDIO_DIR, f)
+        for f in os.listdir(LOCAL_AUDIO_DIR)
+        if f.lower().endswith(('.mp3', '.m4a', '.wav'))
+    ]
+    if not audio_files and drive_service:
+        sync_audio_tracks_from_drive(drive_service)
+        audio_files = [
+            os.path.join(LOCAL_AUDIO_DIR, f)
+            for f in os.listdir(LOCAL_AUDIO_DIR)
+            if f.lower().endswith(('.mp3', '.m4a', '.wav'))
+        ]
+    if audio_files:
+        return random.choice(audio_files)
+    return None
+
+def merge_audio_with_video(video_path, audio_path, output_path):
+    """
+    Menggabungkan video dengan audio BGM menggunakan ffmpeg.
+    - Video di-copy tanpa encode ulang (-c:v copy) sehingga sangat cepat dan kualitas 100% terjaga.
+    - Audio di-encode ke AAC kualitas tinggi (-c:a aac -b:a 192k).
+    - Audio dipotong otomatis sesuai durasi video (-shortest).
+    """
+    ffmpeg_bin = get_ffmpeg_path()
+    if not ffmpeg_bin:
+        print("   ⚠️ Binary FFmpeg tidak ditemukan. Melewati penggabungan audio.")
+        return False
+
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i", video_path,
+        "-i", audio_path,
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-shortest",
+        output_path
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+    except subprocess.CalledProcessError as e:
+        print(f"   ⚠️ FFmpeg error: {e.stderr.decode('utf-8', errors='ignore')[:300]}")
+        return False
+    except Exception as e:
+        print(f"   ⚠️ Gagal menggabungkan audio: {e}")
+        return False
+
 def upload_video_to_youtube(youtube_service, file_path, title, description=YOUTUBE_DESCRIPTION_TEMPLATE):
     """Unggah file video lokal ke YouTube sebagai Shorts Unlisted."""
     body = {
@@ -1582,15 +1710,33 @@ def process_pending_youtube_queue():
         print(f"      🎥 Video DITEMUKAN: {file_name} (ID: {file_id})")
 
         temp_file_path = os.path.join(temp_dir, f"{prod_id}_{file_name}")
+        merged_file_path = os.path.join(temp_dir, f"{prod_id}_with_audio_{file_name}")
+        upload_target_path = temp_file_path
+        audio_name_used = None
+
         try:
             print(f"      ⬇️ Mendownload video dari Google Drive...")
             download_drive_file(drive_service, file_id, temp_file_path)
+
+            # Pilih lagu BGM acak dan gabungkan ke video
+            audio_track = get_random_audio_track(drive_service)
+            if audio_track:
+                audio_name_used = os.path.basename(audio_track)
+                print(f"      🎵 Memilih BGM acak: '{audio_name_used}'")
+                print(f"      🎬 Menggabungkan BGM ke video...")
+                if merge_audio_with_video(temp_file_path, audio_track, merged_file_path):
+                    print(f"      ✅ Audio berhasil digabungkan!")
+                    upload_target_path = merged_file_path
+                else:
+                    print(f"      ⚠️ Gagal menggabungkan audio, mengunggah video asli...")
+            else:
+                print(f"      ℹ️ Tidak ada lagu BGM yang tersedia. Mengunggah video asli...")
 
             if youtube_service is None:
                 youtube_service = get_youtube_service()
 
             print(f"      ⬆️ Mengunggah ke YouTube Shorts (Unlisted): '{yt_title}'...")
-            video_id = upload_video_to_youtube(youtube_service, temp_file_path, yt_title)
+            video_id = upload_video_to_youtube(youtube_service, upload_target_path, yt_title)
             print(f"      🎉 Video berhasil terunggah ke YouTube! Video ID: {video_id}")
 
             print(f"      🔗 Memasang embed video ke Shopify Product ID {prod_id}...")
@@ -1599,6 +1745,8 @@ def process_pending_youtube_queue():
             item['status'] = 'completed'
             item['youtube_video_id'] = video_id
             item['youtube_url'] = f"https://youtu.be/{video_id}"
+            if audio_name_used:
+                item['bgm_track'] = audio_name_used
             item['completed_at'] = datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
             save_youtube_queue(queue)
             print(f"      ✅ Selesai! Antrean untuk '{yt_title}' ditandai COMPLETED.")
@@ -1607,11 +1755,12 @@ def process_pending_youtube_queue():
             print(f"      ❌ Error saat memproses video {file_name}: {e}")
             item['last_error'] = str(e)
         finally:
-            if os.path.exists(temp_file_path):
-                try:
-                    os.remove(temp_file_path)
-                except Exception:
-                    pass
+            for p in [temp_file_path, merged_file_path]:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
 
     save_youtube_queue(queue)
 
