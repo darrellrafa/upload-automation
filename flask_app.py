@@ -44,9 +44,11 @@ API_VERSION = "2025-01"
 
 # Webhooks Google Apps Script
 # 1. Spreadsheet History Foto Studio (Pencatatan Jam Baru / Draft WA)
-APPS_SCRIPT_HISTORY_URL = "https://script.google.com/macros/s/AKfycbxCEcepLLaNouGEmxMJPCFj3vTbWjH41_BFD7tFsYuEkL7h1tV_io3xZBPDSiRC_sgQ/exec"
+APPS_SCRIPT_HISTORY_URL = os.getenv("APPS_SCRIPT_HISTORY_URL", "https://script.google.com/macros/s/AKfycbxCEcepLLaNouGEmxMJPCFj3vTbWjH41_BFD7tFsYuEkL7h1tV_io3xZBPDSiRC_sgQ/exec")
 # 2. Spreadsheet Consignment Listing Photo Studio (Reprice Tracking)
-APPS_SCRIPT_CONSIGNMENT_URL = "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyjPvY_dHnz54fhmzEvSOIJJCDyyWOASeaBMcdOkcMxpftXfTHcqPf2/exec"
+APPS_SCRIPT_CONSIGNMENT_URL = os.getenv("APPS_SCRIPT_CONSIGNMENT_URL", "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyjPvY_dHnz54fhmzEvSOIJJCDyyWOASeaBMcdOkcMxpftXfTHcqPf2/exec")
+# 3. Spreadsheet Slow Moving Items (Featured Items Reprice & Stock Tracking)
+APPS_SCRIPT_SLOW_MOVING_URL = os.getenv("APPS_SCRIPT_SLOW_MOVING_URL", "https://script.google.com/macros/s/AKfycbymvWQh66pDkcSOe1fBC1rQ--VVsTKONFBM-o52qU-8sS0_aEV4JzxFBzEBx1dk-d6O_w/exec")
 
 # Green-API (WhatsApp Bot)
 GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "")
@@ -134,6 +136,55 @@ def parse_reprice_chat(message_text):
         "raw_price": raw_price,
         "numeric_price": numeric_price,
         "formatted_price": format_rupiah(numeric_price)
+    }
+
+def parse_takedown_chat(message_text):
+    """
+    Memvalidasi dan mengekstrak perintah chat TAKEDOWN:
+    Format yang didukung:
+    1. TAKEDOWN / [KODE/SKU]
+    2. TAKE DOWN / [KODE/SKU]
+    3. TAKEDOWN [KODE/SKU]
+    4. TAKEDOWN / [KODE/SKU] / [KETERANGAN/ALASAN]
+    Mendukung SKU dengan karakter garis miring (misal 5720232/4642909).
+    """
+    if not message_text:
+        return None
+
+    clean_text = message_text.strip()
+    m = re.match(r'^(takedown|take\s*down)\b\s*(.*)$', clean_text, re.IGNORECASE)
+    if not m:
+        return None
+
+    rest = m.group(2).strip()
+    if not rest:
+        return None
+
+    if rest.startswith('/'):
+        rest = rest.lstrip('/ \t')
+
+    if not rest:
+        return None
+
+    # Pisahkan jika ada pemisah ' / ' (misal: '5720232/4642909 / laku' atau '5720232 / 4642909')
+    spaced_parts = [p.strip() for p in re.split(r'\s+/\s+', rest) if p.strip()]
+    if len(spaced_parts) > 1:
+        last_part = spaced_parts[-1].lower()
+        if last_part in ["sold", "laku", "cancel", "batal", "booked", "retur", "hold"]:
+            code = " / ".join(spaced_parts[:-1]).strip()
+        else:
+            # Jika user ketik 'takedown / 5720232 / 4642909', gabungkan kembali sebagai serial ganda
+            code = "/".join(spaced_parts).strip()
+    else:
+        code = rest.strip()
+
+    code = clean_sku_string(code)
+    if not code:
+        return None
+
+    return {
+        "command_type": "TAKEDOWN",
+        "code": code
     }
 
 def format_tanggal_indonesia():
@@ -257,9 +308,9 @@ def extract_sku_from_blogger_post(post):
     if not post:
         return None, None
     content = post.get("content", "")
-    sku_match = re.search(r'Code:\s*([\w\-\/]+)', content, re.IGNORECASE)
+    sku_match = re.search(r'Code:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
     sku = sku_match.group(1).strip() if sku_match else None
-    owner_match = re.search(r'Code:\s*[\w\-\/]+\s*\((.*?)\)', content, re.IGNORECASE)
+    owner_match = re.search(r'Code:(?:&nbsp;|\s)*[\w\-\/]+(?:&nbsp;|\s)*\((.*?)\)', content, re.IGNORECASE)
     owner = owner_match.group(1).strip() if owner_match else None
     return sku, owner
 
@@ -332,6 +383,7 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
             new_labels.append("REPRICE")
 
         is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in current_labels)
+        is_featured = any("FEATURED" in l.upper() for l in current_labels)
 
         # 2. Update HTML Konten (Harga)
         price_pattern = r'(Price\s*:\s*)(.*?)(?=<br|</p|</div>|\n|$)'
@@ -411,13 +463,39 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
         return {
             "status": "success",
             "post_title": res.get("title", ""),
+            "publish_date": formatted_prev_date,
             "is_consign_ps": is_consign_ps,
+            "is_featured": is_featured,
             "labels": res.get("labels", []),
             "published": res.get("published", "")
         }
     except Exception as e:
         print(f"⚠️ Error update Blogger post: {e}")
-        return {"status": "error", "message": str(e), "is_consign_ps": False}
+        return {"status": "error", "message": str(e), "is_consign_ps": False, "is_featured": False}
+
+def delete_blogger_post(service, post):
+    """
+    Menghapus postingan di Blogspot berdasarkan objek post.
+    """
+    if not service or not BLOG_ID or not post:
+        return {"status": "skipped", "message": "Blogger service atau data postingan tidak tersedia"}
+
+    post_id = post.get("id")
+    post_title = post.get("title", "")
+    publish_date = format_published_date(post.get("published", ""))
+
+    try:
+        service.posts().delete(blogId=BLOG_ID, postId=post_id).execute()
+        print(f"🗑️ Berhasil menghapus postingan Blogspot: '{post_title}' (ID: {post_id}, Publish Date: {publish_date})")
+        return {
+            "status": "success",
+            "post_title": post_title,
+            "publish_date": publish_date,
+            "post_id": post_id
+        }
+    except Exception as e:
+        print(f"⚠️ Error hapus postingan Blogger: {e}")
+        return {"status": "error", "message": str(e), "post_title": post_title, "publish_date": publish_date}
 
 # ==============================================================================
 # 4. SHOPIFY GRAPHQL REPRICE LOGIC
@@ -443,15 +521,23 @@ def get_shopify_token():
         print(f"⚠️ Error get Shopify token: {e}")
     return None
 
-def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
+def find_shopify_product_and_variant(sku, blogger_post=None):
+    """
+    Mencari Product dan Variant di Shopify menggunakan strategi Waterfall:
+    Level A: Exact SKU match
+    Level B: Canonical SKU match (dari Blogspot)
+    Level C: Base SKU match (buang -1, -2)
+    Level D: Normalized SKU match (hapus spasi & simbol strip)
+    Level E: Slash parts match (serial ganda movement/case)
+    Level 4: Cross-reference Judul Postingan Blogspot
+    """
     token = get_shopify_token()
     if not token:
-        return {"status": "error", "message": "Gagal mendapatkan access token Shopify"}
+        return None, None, None
 
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     graphql_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/graphql.json"
 
-    # 1. Bangun daftar kandidat query SKU untuk pencarian bertingkat (Waterfall Search)
     clean_input_sku = clean_sku_string(sku)
     base_input_sku = re.sub(r'-\d+$', '', clean_input_sku)
     canonical_sku, _ = extract_sku_from_blogger_post(blogger_post) if blogger_post else (None, None)
@@ -484,6 +570,7 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
           node {
             id
             title
+            status
             variants(first: 10) {
               edges {
                 node {
@@ -491,6 +578,10 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
                   sku
                   price
                   compareAtPrice
+                  inventoryItem {
+                    id
+                  }
+                  inventoryQuantity
                 }
               }
             }
@@ -504,7 +595,6 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
     matched_variant = None
     matched_method = None
 
-    # Coba pencarian bertingkat berdasarkan variasi SKU
     for q in search_queries:
         try:
             res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": q}}, timeout=20)
@@ -513,7 +603,6 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
             if not edges:
                 continue
 
-            # Cari varian yang paling cocok di antara hasil
             for p_edge in edges:
                 p_node = p_edge["node"]
                 for v_edge in p_node["variants"]["edges"]:
@@ -557,7 +646,6 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
                 if matched_variant:
                     break
 
-            # Jika belum terpilih varian spesifik tapi ada produk dari query SKU, gunakan varian produk pertama
             if not matched_variant and edges:
                 matched_product = edges[0]["node"]
                 matched_variant = matched_product["variants"]["edges"][0]["node"]
@@ -588,9 +676,18 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
             except Exception as e:
                 print(f"⚠️ Error search Shopify via title: {e}")
 
+    return matched_product, matched_variant, matched_method
+
+def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
+    token = get_shopify_token()
+    if not token:
+        return {"status": "error", "message": "Gagal mendapatkan access token Shopify"}
+
+    matched_product, matched_variant, matched_method = find_shopify_product_and_variant(sku, blogger_post=blogger_post)
     if not matched_variant or not matched_product:
         return {"status": "not_found", "message": f"Produk dengan SKU '{sku}' tidak ditemukan di Shopify (sudah dicoba variasi SKU & cross-reference)."}
 
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     variant_id = matched_variant["id"]
     current_price = float(matched_variant.get("price") or 0)
     current_compare = matched_variant.get("compareAtPrice")
@@ -606,7 +703,6 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
     else: # HARGA_BARU
         compare_at_val = None
         price_val = f"{float(numeric_price):.2f}"
-
 
     # 3. Update harga varian ke Shopify via Admin REST API (Akurat, Langsung, dan Bebas Masalah Versi GraphQL)
     numeric_variant_id = variant_id.split('/')[-1]
@@ -640,6 +736,101 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
     except Exception as e:
         print(f"⚠️ Error update Shopify price: {e}")
         return {"status": "error", "message": str(e)}
+
+def update_shopify_takedown(sku, blogger_post=None):
+    """
+    Mengubah status produk di Shopify menjadi DRAFT dan mengosongkan stoknya (Stock = 0).
+    """
+    token = get_shopify_token()
+    if not token:
+        return {"status": "error", "message": "Gagal mendapatkan access token Shopify"}
+
+    matched_product, matched_variant, matched_method = find_shopify_product_and_variant(sku, blogger_post=blogger_post)
+    if not matched_variant or not matched_product:
+        return {"status": "not_found", "message": f"Produk dengan SKU '{sku}' tidak ditemukan di Shopify."}
+
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    product_id = matched_product["id"]
+    numeric_product_id = product_id.split('/')[-1]
+    variant_id = matched_variant["id"]
+    numeric_variant_id = variant_id.split('/')[-1]
+    product_title = matched_product.get("title", "")
+    actual_sku = matched_variant.get("sku", "")
+
+    # 1. Ubah status produk menjadi 'draft' via REST API
+    prod_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products/{numeric_product_id}.json"
+    prod_payload = {
+        "product": {
+            "id": int(numeric_product_id),
+            "status": "draft"
+        }
+    }
+    status_updated = False
+    try:
+        put_res = requests.put(prod_url, headers=headers, json=prod_payload, timeout=25)
+        if put_res.status_code == 200:
+            status_updated = True
+            print(f"✅ Berhasil ubah status Shopify menjadi DRAFT: {product_title} (ID: {numeric_product_id})")
+        else:
+            print(f"⚠️ Gagal update status produk Shopify: HTTP {put_res.status_code} - {put_res.text}")
+    except Exception as e:
+        print(f"⚠️ Error ubah status draft Shopify: {e}")
+
+    # 2. Ambil inventory_item_id dan set stok menjadi 0 di semua lokasi
+    stock_zeroed = False
+    locations_updated = []
+    try:
+        var_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/variants/{numeric_variant_id}.json"
+        v_res = requests.get(var_url, headers=headers, timeout=20)
+        if v_res.status_code == 200:
+            v_data = v_res.json().get("variant", {})
+            inv_item_id = v_data.get("inventory_item_id")
+            if inv_item_id:
+                levels_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?inventory_item_ids={inv_item_id}"
+                l_res = requests.get(levels_url, headers=headers, timeout=20)
+                levels = l_res.json().get("inventory_levels", []) if l_res.status_code == 200 else []
+
+                set_inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
+
+                if levels:
+                    for lvl in levels:
+                        loc_id = lvl.get("location_id")
+                        s_res = requests.post(set_inv_url, headers=headers, json={
+                            "location_id": loc_id,
+                            "inventory_item_id": inv_item_id,
+                            "available": 0
+                        }, timeout=20)
+                        if s_res.status_code == 200:
+                            locations_updated.append(loc_id)
+                            stock_zeroed = True
+                else:
+                    loc_res = requests.get(f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/locations.json", headers=headers, timeout=20)
+                    locs = loc_res.json().get("locations", []) if loc_res.status_code == 200 else []
+                    if locs:
+                        s_res = requests.post(set_inv_url, headers=headers, json={
+                            "location_id": locs[0]["id"],
+                            "inventory_item_id": inv_item_id,
+                            "available": 0
+                        }, timeout=20)
+                        if s_res.status_code == 200:
+                            locations_updated.append(locs[0]["id"])
+                            stock_zeroed = True
+
+                print(f"📦 Stok varian {actual_sku} berhasil di-set 0 di {len(locations_updated)} lokasi.")
+    except Exception as e:
+        print(f"⚠️ Error ubah stok Shopify ke 0: {e}")
+
+    if status_updated or stock_zeroed:
+        return {
+            "status": "success",
+            "product_title": product_title,
+            "matched_sku": actual_sku,
+            "status_draft": status_updated,
+            "stock_zero": stock_zeroed,
+            "method": matched_method
+        }
+    else:
+        return {"status": "error", "message": f"Gagal mengubah status dan stok produk '{product_title}'."}
 
 # ==============================================================================
 # 5. GOOGLE SPREADSHEET REPRICE LOGIC (PHOTO STUDIO - CONSIGNMENT PS)
@@ -678,6 +869,34 @@ def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_pric
             return {"status": "error", "message": f"HTTP status {res.status_code}"}
     except Exception as e:
         print(f"⚠️ Error Webhook Sheets Consignment: {e}")
+        return {"status": "error", "message": str(e)}
+
+def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, canonical_sku=None):
+    """
+    Mengirim perintah update harga ke Google Apps Script Spreadsheet 'Stock List Slow Moving Items'.
+    Kriteria:
+    - Hanya jika produk memiliki label FEATURED di Blogspot.
+    - Mencari di tab 'ALL STOCK' atau 'NEW ARRIVAL'.
+    - Mencocokkan SKU / Serial Number di Kolom K (SERIAL NUMBER).
+    - Memperbarui Status di Kolom B menjadi 'REPRICE' (jika REPRICE).
+    - Memperbarui Harga di Kolom I (PRICE) menjadi harga baru.
+    """
+    payload = {
+        "action": "reprice_slow_moving",
+        "sku": sku,
+        "canonical_sku": canonical_sku,
+        "command_type": command_type,
+        "formatted_price": formatted_price,
+        "numeric_price": numeric_price
+    }
+    try:
+        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=25)
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {"status": "error", "message": f"HTTP status {res.status_code}"}
+    except Exception as e:
+        print(f"⚠️ Error Webhook Sheets Slow Moving: {e}")
         return {"status": "error", "message": str(e)}
 
 # ==============================================================================
@@ -737,33 +956,44 @@ def wa_webhook():
             # 1. Update Blogspot
             blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
             is_consign_ps = False
+            is_featured = False
             service = get_blogger_service()
             post = None
             if service:
                 post = find_blogger_post_by_code(service, sku)
                 if post:
                     blogger_res = update_blogger_reprice(service, post, cmd_type, formatted_price)
-                    is_consign_ps = blogger_res.get("is_consign_ps", False)
+                    post_labels = post.get("labels", [])
+                    is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
+                    is_featured = any("FEATURED" in l.upper() for l in post_labels)
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
 
             # 2. Update Shopify (dengan Multi-Level Smart Matching & Fallback Post Blogspot)
             shopify_res = update_shopify_reprice(sku, cmd_type, numeric_price, blogger_post=post)
 
-            # 3. Update Google Spreadsheet Consignment (HANYA jika CONSIGNMENT_PS)
-            sheet_res = {"status": "skipped", "message": "Bukan CONSIGNMENT_PS (diabaikan)"}
+            # 3. Update Google Spreadsheet
+            canonical_sku = shopify_res.get("matched_sku") or (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
+            
+            # 3a. Update Spreadsheet Consignment (HANYA jika CONSIGNMENT_PS)
+            sheet_consign_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
             if is_consign_ps:
-                # Gunakan SKU kanonik dari Shopify atau Blogspot jika ada
-                canonical_sku = shopify_res.get("matched_sku") or (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
                 print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment...")
-                sheet_res = update_consignment_ps_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
+                sheet_consign_res = update_consignment_ps_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
             else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS. Google Spreadsheet dilewati sesuai aturan.")
+                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS.")
+
+            # 3b. Update Spreadsheet Slow Moving (HANYA jika FEATURED)
+            sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
+            if is_featured:
+                print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL)...")
+                sheet_slow_moving_res = update_slow_moving_sheet(sku, cmd_type, formatted_price, numeric_price, canonical_sku=canonical_sku)
+            else:
+                print(f"ℹ️ Produk '{sku}' BUKAN FEATURED.")
 
             # 4. Kirim Balasan Laporan Lengkap ke WhatsApp
             status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
             status_shop_icon = "✅" if shopify_res.get("status") == "success" else "⚠️"
-            status_sheet_icon = "✅" if sheet_res.get("status") == "success" else ("⏭️" if sheet_res.get("status") == "skipped" else "⚠️")
 
             sku_display = sku
             if shopify_res.get("matched_sku") and shopify_res.get("matched_sku").upper() != clean_sku_string(sku).upper():
@@ -776,17 +1006,33 @@ def wa_webhook():
                 f"💰 *Harga Baru:* {formatted_price}\n"
                 f"👤 *Diupdate oleh:* {sender_name}\n\n"
                 f"{status_blog_icon} *Blogspot:* {blogger_res.get('post_title', blogger_res.get('message', 'Sukses'))}\n"
-                f"{status_shop_icon} *Shopify:* {shopify_res.get('product_title', shopify_res.get('message', 'Sukses'))}\n"
-                f"{status_sheet_icon} *Spreadsheet (Consignment):* "
             )
-            if sheet_res.get("status") == "success":
-                pesan_konfirmasi += f"Tercatat di baris {sheet_res.get('row', '-')} ({sheet_res.get('tracking_checked', '')})"
-            elif sheet_res.get("status") == "skipped":
-                pesan_konfirmasi += "Dilewati (Bukan tag CONSIGNMENT_PS)"
-            else:
-                pesan_konfirmasi += f"{sheet_res.get('message', 'Gagal')}"
+            if blogger_res.get("publish_date"):
+                pesan_konfirmasi += f"   • Publish Date: {blogger_res.get('publish_date')}\n"
 
-            kirim_balasan_wa(chat_id, pesan_konfirmasi)
+            pesan_konfirmasi += f"{status_shop_icon} *Shopify:* {shopify_res.get('product_title', shopify_res.get('message', 'Sukses'))}\n"
+
+            # Bagian Status Spreadsheet
+            if is_consign_ps:
+                status_consign_icon = "✅" if sheet_consign_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment):* "
+                if sheet_consign_res.get("status") == "success":
+                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_res.get('row', '-')} ({sheet_consign_res.get('tracking_checked', '')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_consign_res.get('message', 'Gagal')}\n"
+
+            if is_featured:
+                status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_slow_icon} *Spreadsheet (Slow Moving):* "
+                if sheet_slow_moving_res.get("status") == "success":
+                    pesan_konfirmasi += f"Tercatat di baris {sheet_slow_moving_res.get('row', '-')} (Tab {sheet_slow_moving_res.get('tab_name', '-')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
+
+            if not is_consign_ps and not is_featured:
+                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / FEATURED)\n"
+
+            kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
 
             return jsonify({
                 "status": "success",
@@ -794,16 +1040,77 @@ def wa_webhook():
                 "sku": sku,
                 "blogger": blogger_res,
                 "shopify": shopify_res,
-                "spreadsheet": sheet_res
+                "spreadsheet_consignment": sheet_consign_res,
+                "spreadsheet_slow_moving": sheet_slow_moving_res
             }), 200
 
         # ======================================================================
-        # JALUR B: INPUT DRAFT JAM BARU (FOTO STUDIO WA)
+        # JALUR B: PERINTAH TAKEDOWN
+        # ======================================================================
+        takedown_cmd = parse_takedown_chat(caption)
+        if takedown_cmd:
+            sku = takedown_cmd["code"]
+            print(f"🗑️ Menerima Perintah TAKEDOWN untuk SKU: '{sku}' dari: {sender_name}")
+
+            service = get_blogger_service()
+            post = None
+            if service:
+                post = find_blogger_post_by_code(service, sku)
+
+            # 1. Update Shopify: Status DRAFT & Stock 0
+            shopify_res = update_shopify_takedown(sku, blogger_post=post)
+
+            # 2. Hapus Postingan Blogspot
+            blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
+            if service:
+                if post:
+                    blogger_res = delete_blogger_post(service, post)
+                else:
+                    blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
+
+            # 3. Kirim Balasan Laporan Lengkap ke WhatsApp
+            status_shop_icon = "✅" if shopify_res.get("status") == "success" else "⚠️"
+            status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
+
+            sku_display = sku
+            if shopify_res.get("matched_sku") and shopify_res.get("matched_sku").upper() != clean_sku_string(sku).upper():
+                sku_display += f" _(Shopify: {shopify_res.get('matched_sku')})_"
+
+            pesan_konfirmasi = (
+                f"🗑️ *LAPORAN TAKEDOWN IDWX*\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🔢 *Kode / SKU:* {sku_display}\n"
+                f"👤 *Diupdate oleh:* {sender_name}\n\n"
+                f"{status_shop_icon} *Shopify:* {shopify_res.get('product_title', shopify_res.get('message', 'Sukses'))}\n"
+            )
+            if shopify_res.get("status") == "success":
+                pesan_konfirmasi += "   • Status: *DRAFT*\n   • Stock: *0*\n"
+
+            pesan_konfirmasi += f"{status_blog_icon} *Blogspot:* "
+            if blogger_res.get("status") == "success":
+                pesan_konfirmasi += f"Postingan Berhasil Dihapus\n   • Judul: {blogger_res.get('post_title', '-')}\n"
+                if blogger_res.get("publish_date"):
+                    pesan_konfirmasi += f"   • Publish Date: {blogger_res.get('publish_date')}\n"
+            else:
+                pesan_konfirmasi += f"{blogger_res.get('message', 'Gagal')}\n"
+
+            kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
+
+            return jsonify({
+                "status": "success",
+                "command": "TAKEDOWN",
+                "sku": sku,
+                "shopify": shopify_res,
+                "blogger": blogger_res
+            }), 200
+
+        # ======================================================================
+        # JALUR C: INPUT DRAFT JAM BARU (FOTO STUDIO WA)
         # ======================================================================
         # Validasi ketat: Wajib melampirkan foto & format caption jam tangan valid
         if not is_valid_foto_studio_caption(caption, image_url):
-            print(f"⏭️ Diabaikan: Pesan bukan perintah REPRICE dan bukan format foto studio jam baru yang valid.")
-            return jsonify({"status": "ignored", "reason": "Not recognized as reprice or valid photo studio submission"}), 200
+            print(f"⏭️ Diabaikan: Pesan bukan perintah REPRICE/TAKEDOWN dan bukan format foto studio jam baru yang valid.")
+            return jsonify({"status": "ignored", "reason": "Not recognized as reprice/takedown or valid photo studio submission"}), 200
 
         serial_number = ekstraksi_serial_number(caption)
         tanggal_hari_ini = format_tanggal_indonesia()
