@@ -87,10 +87,31 @@ def parse_reprice_chat(message_text):
     Memvalidasi dan mengekstrak perintah chat:
     1. REPRICE / [KODE] / [HARGA]
     2. HARGA BARU / [KODE] / [HARGA]
+    Mendukung SKU yang mengandung karakter garis miring (misal Patek Philippe: 5720232/4642909).
     """
     if not message_text or "/" not in message_text:
         return None
 
+    # Cara 1: Coba split dengan pemisah ' / ' (garis miring berpagar spasi)
+    spaced_parts = [p.strip() for p in re.split(r'\s+/\s+', message_text.strip()) if p.strip()]
+    if len(spaced_parts) >= 3:
+        cmd = spaced_parts[0].upper().strip()
+        if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
+            raw_price = spaced_parts[-1].strip()
+            code = " / ".join(spaced_parts[1:-1]).strip()
+            numeric_price = parse_price(raw_price)
+            if numeric_price > 0:
+                cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
+                return {
+                    "command_type": cmd_type,
+                    "code": code,
+                    "raw_price": raw_price,
+                    "numeric_price": numeric_price,
+                    "formatted_price": format_rupiah(numeric_price)
+                }
+
+    # Cara 2: Split standar dengan '/' jika user tidak memakai spasi di sekitar slash
+    # Elemen pertama adalah command, elemen terakhir adalah harga, semua elemen di tengah adalah SKU
     parts = [p.strip() for p in message_text.split('/') if p.strip()]
     if len(parts) < 3:
         return None
@@ -99,13 +120,12 @@ def parse_reprice_chat(message_text):
     if cmd not in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
         return None
 
-    code = parts[1].strip()
-    raw_price = parts[2].strip()
-
+    raw_price = parts[-1].strip()
     numeric_price = parse_price(raw_price)
     if numeric_price <= 0:
         return None
 
+    code = "/".join(parts[1:-1]).strip()
     cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
 
     return {
@@ -252,6 +272,11 @@ def find_blogger_post_by_code(service, code):
     search_candidates = [clean_code]
     if base_code and base_code != clean_code:
         search_candidates.append(base_code)
+    if "/" in clean_code:
+        for sp in clean_code.split('/'):
+            sp_clean = sp.strip()
+            if sp_clean and sp_clean not in search_candidates:
+                search_candidates.append(sp_clean)
     if code.strip() not in search_candidates:
         search_candidates.append(code.strip())
 
@@ -438,6 +463,12 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
     if base_input_sku and base_input_sku != clean_input_sku:
         search_queries.append(f"sku:{base_input_sku}")
         search_queries.append(f"sku:{base_input_sku}*")
+    if "/" in clean_input_sku:
+        slash_parts = [p.strip() for p in clean_input_sku.split('/') if p.strip()]
+        for sp in slash_parts:
+            if f"sku:{sp}" not in search_queries:
+                search_queries.append(f"sku:{sp}")
+                search_queries.append(f"sku:{sp}*")
     if canonical_sku:
         clean_canonical = clean_sku_string(canonical_sku)
         if f"sku:{clean_canonical}" not in search_queries:
@@ -513,6 +544,15 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
                         matched_variant = vn
                         matched_method = "normalized_sku"
                         break
+                    # Level E: Match slash parts (misal serial ganda movement/case)
+                    if "/" in clean_input_sku or "/" in v_sku:
+                        input_parts = [p.strip().upper() for p in clean_input_sku.split('/') if p.strip()]
+                        v_parts = [p.strip().upper() for p in v_sku.split('/') if p.strip()]
+                        if any(ip in v_parts or ip == v_sku for ip in input_parts) or any(vp in input_parts or vp == clean_input_sku.upper() for vp in v_parts):
+                            matched_product = p_node
+                            matched_variant = vn
+                            matched_method = "slash_part_sku"
+                            break
 
                 if matched_variant:
                     break
@@ -567,42 +607,36 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
         compare_at_val = None
         price_val = f"{float(numeric_price):.2f}"
 
-    mutation = """
-    mutation updateVariantPrice($input: ProductVariantInput!) {
-      productVariantUpdate(input: $input) {
-        productVariant {
-          id
-          price
-          compareAtPrice
-        }
-        userErrors {
-          field
-          message
-        }
-      }
-    }
-    """
-    m_input = {
-        "id": variant_id,
-        "price": price_val,
-        "compareAtPrice": compare_at_val
-    }
-    try:
-        mut_res = requests.post(graphql_url, headers=headers, json={"query": mutation, "variables": {"input": m_input}}, timeout=30)
-        mut_data = mut_res.json()
-        user_errors = mut_data.get("data", {}).get("productVariantUpdate", {}).get("userErrors", [])
-        if user_errors:
-            return {"status": "error", "message": user_errors[0].get("message", "Shopify error")}
 
-        print(f"✅ Berhasil update harga Shopify: {matched_product['title']} (SKU: {actual_sku}, Method: {matched_method})")
-        return {
-            "status": "success",
-            "product_title": matched_product["title"],
-            "matched_sku": actual_sku,
-            "method": matched_method,
-            "new_price": float(price_val),
+    # 3. Update harga varian ke Shopify via Admin REST API (Akurat, Langsung, dan Bebas Masalah Versi GraphQL)
+    numeric_variant_id = variant_id.split('/')[-1]
+    rest_variant_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/variants/{numeric_variant_id}.json"
+
+    variant_payload = {
+        "variant": {
+            "id": int(numeric_variant_id),
+            "price": price_val,
             "compare_at_price": compare_at_val
         }
+    }
+    try:
+        put_res = requests.put(rest_variant_url, headers=headers, json=variant_payload, timeout=30)
+        if put_res.status_code == 200:
+            res_variant = put_res.json().get("variant", {})
+            updated_price = float(res_variant.get("price") or price_val)
+            updated_compare = res_variant.get("compare_at_price")
+            print(f"✅ Berhasil update harga Shopify: {matched_product['title']} (SKU: {actual_sku}, Price: {updated_price}, Compare: {updated_compare}, Method: {matched_method})")
+            return {
+                "status": "success",
+                "product_title": matched_product["title"],
+                "matched_sku": actual_sku,
+                "method": matched_method,
+                "new_price": updated_price,
+                "compare_at_price": updated_compare
+            }
+        else:
+            print(f"⚠️ Gagal update harga Shopify (HTTP {put_res.status_code}): {put_res.text}")
+            return {"status": "error", "message": f"Shopify HTTP {put_res.status_code}: {put_res.text}"}
     except Exception as e:
         print(f"⚠️ Error update Shopify price: {e}")
         return {"status": "error", "message": str(e)}
