@@ -383,44 +383,72 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
             new_labels.append("REPRICE")
 
         is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in current_labels)
+        is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in current_labels)
         is_featured = any("FEATURED" in l.upper() for l in current_labels)
 
         # 2. Update HTML Konten (Harga)
-        price_pattern = r'(Price\s*:\s*)(.*?)(?=<br|</p|</div>|\n|$)'
-        reprice_pattern = r'(?:<br\s*/?>|\n)?\s*Reprice\s*:\s*<b>.*?</b>'
-
         updated_html = current_html
 
-        if command_type == "REPRICE":
-            m = re.search(price_pattern, updated_html, re.IGNORECASE)
-            old_price_text = ""
-            if m:
-                raw_val = m.group(2)
-                if "<strike>" not in raw_val.lower() and "<s>" not in raw_val.lower():
-                    old_price_text = raw_val.strip()
-                else:
-                    strike_m = re.search(r'<(?:strike|s)>(.*?)</(?:strike|s)>', raw_val, re.IGNORECASE)
-                    if strike_m:
-                        old_price_text = strike_m.group(1).strip()
+        # a. Bersihkan Reprice sebelumnya jika berada di container div / separator tersendiri
+        updated_html = re.sub(
+            r'<div[^>]*class=["\']separator["\'][^>]*>\s*(?:<strike>)?\s*(?:<span[^>]*>)?\s*Reprice\s*:.*?</div>',
+            '',
+            updated_html,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        updated_html = re.sub(
+            r'<div[^>]*>\s*(?:<strike>)?\s*(?:<span[^>]*>)?\s*Reprice\s*:.*?</div>',
+            '',
+            updated_html,
+            flags=re.IGNORECASE | re.DOTALL
+        )
+        # Bersihkan Reprice inline jika masih ada di luar blok Price
+        updated_html = re.sub(
+            r'(?:<br\s*/?>|\n)\s*(?:<span[^>]*>)?\s*Reprice\s*:\s*.*?(?=(?:</span>\s*)?</div>|</p|<br\s*/?>|<span><!--more-->|<!--more-->|\n|$)',
+            '',
+            updated_html,
+            flags=re.IGNORECASE
+        )
+        # Bersihkan sisa tag strike kosong atau more yang terpotong dari reprice lama
+        updated_html = re.sub(r'<strike>\s*(?:<br\s*/?>)?\s*</strike>', '', updated_html, flags=re.IGNORECASE)
+        updated_html = re.sub(r'<span[^>]*>\s*<strike>\s*<span><!--more--></span>\s*</strike>\s*</span>', '', updated_html, flags=re.IGNORECASE)
 
-            updated_html = re.sub(reprice_pattern, '', updated_html, flags=re.IGNORECASE)
-
-            if m:
-                if old_price_text:
-                    replacement = f"Price: <strike>{old_price_text}</strike><br/>Reprice: <b>{formatted_price}</b>"
-                else:
-                    replacement = f"Price: <strike>{formatted_price}</strike><br/>Reprice: <b>{formatted_price}</b>"
-                updated_html = re.sub(price_pattern, replacement, updated_html, count=1, flags=re.IGNORECASE)
+        # b. Ekstrak teks harga lama (old_price_text)
+        m_price = re.search(r'Price\s*:\s*(.*?)(?=</div>|</p|<br|\n|$)', updated_html, re.IGNORECASE)
+        old_price_text = ""
+        if m_price:
+            raw_val = m_price.group(1)
+            strike_m = re.search(r'<(?:strike|s)>(.*?)</(?:strike|s)>', raw_val, re.IGNORECASE)
+            target_val = strike_m.group(1) if strike_m else raw_val
+            clean_text = re.sub(r'<[^>]+>', '', target_val)
+            clean_text = clean_text.replace('&nbsp;', ' ').strip()
+            curr_m = re.search(r'(?:Rp\.?|IDR)?\s*[\d\.,]+', clean_text, re.IGNORECASE)
+            if curr_m:
+                old_price_text = curr_m.group(0).strip()
+                if not old_price_text.upper().startswith("RP") and not old_price_text.upper().startswith("IDR"):
+                    old_price_text = "Rp " + old_price_text
             else:
-                updated_html += f"<br/>Price: <strike>{formatted_price}</strike><br/>Reprice: <b>{formatted_price}</b>"
+                old_price_text = clean_text or formatted_price
 
+        if not old_price_text:
+            old_price_text = formatted_price
+
+        # c. Terapkan penggantian seluruh blok harga (mencakup Price, Strike, dan Reprice lama secara utuh)
+        price_full_block_pattern = r'Price\s*:\s*(?:.*?)(?=(?:<span>\s*)?<!--more-->|<!--more-->|(?:</span>\s*)?</div>|</p|\n|$)'
+
+        if command_type == "REPRICE":
+            replacement = f"Price: <strike>{old_price_text}</strike><br/>Reprice: <b>{formatted_price}</b>"
         else: # HARGA_BARU
-            updated_html = re.sub(reprice_pattern, '', updated_html, flags=re.IGNORECASE)
             replacement = f"Price: {formatted_price}"
-            if re.search(price_pattern, updated_html, re.IGNORECASE):
-                updated_html = re.sub(price_pattern, replacement, updated_html, count=1, flags=re.IGNORECASE)
+
+        if re.search(price_full_block_pattern, updated_html, re.IGNORECASE):
+            updated_html = re.sub(price_full_block_pattern, replacement, updated_html, count=1, flags=re.IGNORECASE)
+        else:
+            if command_type == "REPRICE":
+                updated_html += f"<br/>Price: <strike>{formatted_price}</strike><br/>Reprice: <b>{formatted_price}</b>"
             else:
                 updated_html += f"<br/>Price: {formatted_price}"
+
 
         # 2b. Update / Tambahkan 'Last Post: [tanggal sebelum update]' jika sudah REPRICE atau REPOST
         if (has_reprice_or_repost or re.search(r'Last\s*Post\s*:', updated_html, re.IGNORECASE)) and formatted_prev_date:
@@ -465,13 +493,14 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
             "post_title": res.get("title", ""),
             "publish_date": formatted_prev_date,
             "is_consign_ps": is_consign_ps,
+            "is_consign_po": is_consign_po,
             "is_featured": is_featured,
             "labels": res.get("labels", []),
             "published": res.get("published", "")
         }
     except Exception as e:
         print(f"⚠️ Error update Blogger post: {e}")
-        return {"status": "error", "message": str(e), "is_consign_ps": False, "is_featured": False}
+        return {"status": "error", "message": str(e), "is_consign_ps": False, "is_consign_po": False, "is_featured": False}
 
 def delete_blogger_post(service, post):
     """
@@ -833,13 +862,16 @@ def update_shopify_takedown(sku, blogger_post=None):
         return {"status": "error", "message": f"Gagal mengubah status dan stok produk '{product_title}'."}
 
 # ==============================================================================
-# 5. GOOGLE SPREADSHEET REPRICE LOGIC (PHOTO STUDIO - CONSIGNMENT PS)
+# 5. GOOGLE SPREADSHEET REPRICE LOGIC (CONSIGNMENT PS & CONSIGNMENT PO)
 # ==============================================================================
-def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_price):
+def update_consignment_sheet(sku, command_type, formatted_price, numeric_price, sheet_name="PHOTO STUDIO"):
     """
-    Mengirim perintah update ke Google Apps Script Spreadsheet Consignment Listing Photo Studio.
+    Mengirim perintah update ke Google Apps Script Spreadsheet Consignment Listing.
+    Mendukung:
+    - Tab 'PHOTO STUDIO' (Label: CONSIGNMENT_PS)
+    - Tab 'PHOTO OWNER'  (Label: CONSIGNMENT_PO)
     Kriteria:
-    - Tab: PHOTO STUDIO
+    - Tab: Sesuai parameter sheet_name ('PHOTO STUDIO' / 'PHOTO OWNER')
     - Kolom A (Status) harus Available / Reprice
     - Kolom C (Serial Number) = SKU
     - Kolom M (2ND), N (3RD), O (4TH) dicek berurutan mana yang belum dicentang
@@ -850,9 +882,11 @@ def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_pric
 
     notes_text = f"REPRICE {formatted_price} ({date_str})" if command_type == "REPRICE" else f"HARGA BARU {formatted_price} ({date_str})"
 
+    action_name = "reprice_photo_owner" if sheet_name == "PHOTO OWNER" else "reprice_photo_studio"
+
     payload = {
-        "action": "reprice_photo_studio",
-        "sheet_name": "PHOTO STUDIO",
+        "action": action_name,
+        "sheet_name": sheet_name,
         "sku": sku,
         "command_type": command_type,
         "formatted_price": formatted_price,
@@ -868,8 +902,14 @@ def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_pric
         else:
             return {"status": "error", "message": f"HTTP status {res.status_code}"}
     except Exception as e:
-        print(f"⚠️ Error Webhook Sheets Consignment: {e}")
+        print(f"⚠️ Error Webhook Sheets Consignment ({sheet_name}): {e}")
         return {"status": "error", "message": str(e)}
+
+def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_price):
+    return update_consignment_sheet(sku, command_type, formatted_price, numeric_price, sheet_name="PHOTO STUDIO")
+
+def update_consignment_po_sheet(sku, command_type, formatted_price, numeric_price):
+    return update_consignment_sheet(sku, command_type, formatted_price, numeric_price, sheet_name="PHOTO OWNER")
 
 def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, canonical_sku=None):
     """
@@ -956,6 +996,7 @@ def wa_webhook():
             # 1. Update Blogspot
             blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
             is_consign_ps = False
+            is_consign_po = False
             is_featured = False
             service = get_blogger_service()
             post = None
@@ -965,6 +1006,7 @@ def wa_webhook():
                     blogger_res = update_blogger_reprice(service, post, cmd_type, formatted_price)
                     post_labels = post.get("labels", [])
                     is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
+                    is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
                     is_featured = any("FEATURED" in l.upper() for l in post_labels)
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
@@ -975,15 +1017,23 @@ def wa_webhook():
             # 3. Update Google Spreadsheet
             canonical_sku = shopify_res.get("matched_sku") or (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
             
-            # 3a. Update Spreadsheet Consignment (HANYA jika CONSIGNMENT_PS)
-            sheet_consign_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
+            # 3a. Update Spreadsheet Consignment PS (HANYA jika CONSIGNMENT_PS)
+            sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
             if is_consign_ps:
-                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment...")
-                sheet_consign_res = update_consignment_ps_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO)...")
+                sheet_consign_ps_res = update_consignment_ps_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
             else:
                 print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS.")
 
-            # 3b. Update Spreadsheet Slow Moving (HANYA jika FEATURED)
+            # 3b. Update Spreadsheet Consignment PO (HANYA jika CONSIGNMENT_PO)
+            sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
+            if is_consign_po:
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER)...")
+                sheet_consign_po_res = update_consignment_po_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
+            else:
+                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PO.")
+
+            # 3c. Update Spreadsheet Slow Moving (HANYA jika FEATURED)
             sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
             if is_featured:
                 print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL)...")
@@ -1014,12 +1064,20 @@ def wa_webhook():
 
             # Bagian Status Spreadsheet
             if is_consign_ps:
-                status_consign_icon = "✅" if sheet_consign_res.get("status") == "success" else "⚠️"
-                pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment):* "
-                if sheet_consign_res.get("status") == "success":
-                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_res.get('row', '-')} ({sheet_consign_res.get('tracking_checked', '')})\n"
+                status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
+                if sheet_consign_ps_res.get("status") == "success":
+                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_ps_res.get('row', '-')} ({sheet_consign_ps_res.get('tracking_checked', '')})\n"
                 else:
-                    pesan_konfirmasi += f"{sheet_consign_res.get('message', 'Gagal')}\n"
+                    pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
+
+            if is_consign_po:
+                status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
+                if sheet_consign_po_res.get("status") == "success":
+                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_po_res.get('row', '-')} ({sheet_consign_po_res.get('tracking_checked', '')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
             if is_featured:
                 status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
@@ -1029,8 +1087,8 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
 
-            if not is_consign_ps and not is_featured:
-                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / FEATURED)\n"
+            if not is_consign_ps and not is_consign_po and not is_featured:
+                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / CONSIGNMENT_PO / FEATURED)\n"
 
             kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
 
@@ -1040,9 +1098,11 @@ def wa_webhook():
                 "sku": sku,
                 "blogger": blogger_res,
                 "shopify": shopify_res,
-                "spreadsheet_consignment": sheet_consign_res,
+                "spreadsheet_consignment_ps": sheet_consign_ps_res,
+                "spreadsheet_consignment_po": sheet_consign_po_res,
                 "spreadsheet_slow_moving": sheet_slow_moving_res
             }), 200
+
 
         # ======================================================================
         # JALUR B: PERINTAH TAKEDOWN
