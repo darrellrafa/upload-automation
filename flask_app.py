@@ -611,7 +611,7 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
 
 def delete_blogger_post(service, post):
     """
-    Menghapus postingan di Blogspot berdasarkan objek post.
+    Menghapus postingan di Blogspot berdasarkan objek post dan memindahkannya ke Sampah (Trash).
     """
     if not service or not BLOG_ID or not post:
         return {"status": "skipped", "message": "Blogger service atau data postingan tidak tersedia"}
@@ -621,16 +621,18 @@ def delete_blogger_post(service, post):
     publish_date = format_published_date(post.get("published", ""))
 
     try:
-        service.posts().delete(blogId=BLOG_ID, postId=post_id).execute()
-        print(f"🗑️ Berhasil menghapus postingan Blogspot: '{post_title}' (ID: {post_id}, Publish Date: {publish_date})")
+        # Gunakan useTrash=True agar postingan dipindahkan ke folder Sampah (Trash), bukan dihapus permanen
+        service.posts().delete(blogId=BLOG_ID, postId=post_id, useTrash=True).execute()
+        print(f"🗑️ Berhasil memindahkan postingan Blogspot ke Trash: '{post_title}' (ID: {post_id}, Publish Date: {publish_date})")
         return {
             "status": "success",
             "post_title": post_title,
             "publish_date": publish_date,
-            "post_id": post_id
+            "post_id": post_id,
+            "in_trash": True
         }
     except Exception as e:
-        print(f"⚠️ Error hapus postingan Blogger: {e}")
+        print(f"⚠️ Error memindahkan postingan Blogger ke Trash: {e}")
         return {"status": "error", "message": str(e), "post_title": post_title, "publish_date": publish_date}
 
 def update_blogger_repost(service, post):
@@ -1347,7 +1349,7 @@ def wa_webhook():
 
             pesan_konfirmasi += f"{status_blog_icon} *Blogspot:* "
             if blogger_res.get("status") == "success":
-                pesan_konfirmasi += f"Postingan Berhasil Dihapus\n   • Judul: {blogger_res.get('post_title', '-')}\n"
+                pesan_konfirmasi += f"Dipindahkan ke Sampah (Trash)\n   • Judul: {blogger_res.get('post_title', '-')}\n"
                 if blogger_res.get("publish_date"):
                     pesan_konfirmasi += f"   • Publish Date: {blogger_res.get('publish_date')}\n"
             else:
