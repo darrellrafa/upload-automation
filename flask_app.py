@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
@@ -187,6 +188,47 @@ def parse_takedown_chat(message_text):
         "code": code
     }
 
+def parse_repost_chat(message_text):
+    """
+    Memvalidasi dan mengekstrak perintah chat REPOST:
+    Format yang didukung:
+    1. REPOST / [KODE]
+    2. REPOST [KODE]
+    Mendukung SKU dengan karakter garis miring (misal 5720232/4642909).
+    """
+    if not message_text:
+        return None
+
+    clean_text = message_text.strip()
+    m = re.match(r'^(repost|re-post|re\s+post)\b\s*(.*)$', clean_text, re.IGNORECASE)
+    if not m:
+        return None
+
+    rest = m.group(2).strip()
+    if not rest:
+        return None
+
+    if rest.startswith('/'):
+        rest = rest.lstrip('/ \t')
+
+    if not rest:
+        return None
+
+    spaced_parts = [p.strip() for p in re.split(r'\s+/\s+', rest) if p.strip()]
+    if len(spaced_parts) > 1:
+        code = "/".join(spaced_parts).strip()
+    else:
+        code = rest.strip()
+
+    code = clean_sku_string(code)
+    if not code:
+        return None
+
+    return {
+        "command_type": "REPOST",
+        "code": code
+    }
+
 def format_tanggal_indonesia():
     hari = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
     bulan = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", 
@@ -267,15 +309,80 @@ def ekstraksi_serial_number(caption):
 
     return "INPUT-MANUAL"
 
-def kirim_balasan_wa(chat_id, pesan_text):
+def kirim_balasan_wa(chat_id, pesan_text, image_url=None):
     if not GREEN_API_ID_INSTANCE or not GREEN_API_API_TOKEN or "xxxx" in GREEN_API_ID_INSTANCE:
         return
     try:
+        if image_url:
+            # Kirim gambar beserta caption melalui Green API sendFileByUrl
+            url_file = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendFileByUrl/{GREEN_API_API_TOKEN}"
+            payload_file = {
+                "chatId": chat_id,
+                "urlFile": image_url,
+                "fileName": "watch.jpg",
+                "caption": pesan_text
+            }
+            res = requests.post(url_file, json=payload_file, timeout=20)
+            if res.status_code == 200:
+                print(f"📷 Berhasil mengirim feedback WA beserta foto jam tangan ke {chat_id}")
+                return
+            else:
+                print(f"⚠️ Green API sendFileByUrl gagal (Status {res.status_code}): {res.text}. Fallback ke pesan teks biasa...")
+
+        # Fallback ke pesan teks biasa jika tidak ada gambar atau pengiriman gambar gagal
         url = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
         payload = {"chatId": chat_id, "message": pesan_text}
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"⚠️ Gagal kirim balasan WA: {e}")
+
+def extract_first_image_from_post(post):
+    """
+    Memastikan mengambil gambar PERTAMA dari postingan di Blogspot
+    berdasarkan urutan dokumen HTML (tampilan paling atas artikel).
+    """
+    if not post:
+        return None
+
+    # 1. Prioritaskan parsing konten HTML agar 100% sesuai urutan gambar paling atas
+    content = post.get("content", "")
+    if content:
+        try:
+            soup = BeautifulSoup(content, 'html.parser')
+            first_img = soup.find('img')
+            if first_img and 'src' in first_img.attrs:
+                raw_url = first_img['src'].strip()
+                # Cek jika img dibungkus oleh tag <a> (biasanya link resolusi tinggi bawaan Blogger)
+                parent_a = first_img.find_parent('a')
+                if parent_a and 'href' in parent_a.attrs:
+                    href = parent_a['href'].strip()
+                    if re.search(r'\.(jpg|jpeg|png|webp)($|\?)', href, re.IGNORECASE) or 'googleusercontent.com' in href or 'bp.blogspot.com' in href:
+                        raw_url = href
+
+                # Konversi format ukuran thumbnail (/s320/, /w640-h480/, dll) ke original size (/s1600/ atau =s0)
+                high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s1600/\1', raw_url)
+                high_res_url = re.sub(r'=(s\d+|w\d+-h\d+[^/]*)$', '=s0', high_res_url)
+                return high_res_url
+        except Exception as e:
+            print(f"⚠️ Error parsing HTML untuk gambar pertama: {e}")
+
+        # Fallback regex untuk tag <img> pertama dalam HTML jika parser ada kendala
+        img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', content, re.IGNORECASE)
+        if img_match:
+            raw_url = img_match.group(1).strip()
+            high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s1600/\1', raw_url)
+            high_res_url = re.sub(r'=(s\d+|w\d+-h\d+[^/]*)$', '=s0', high_res_url)
+            return high_res_url
+
+    # 2. Fallback terakhir: Cek field images bawaan Blogger API jika konten HTML tidak memuat tag <img>
+    images = post.get("images", [])
+    if images and isinstance(images, list) and len(images) > 0:
+        first_img = images[0]
+        url = first_img.get("url") if isinstance(first_img, dict) else first_img
+        if url:
+            return url
+
+    return None
 
 # ==============================================================================
 # 3. BLOGGER SERVICE & REPRICE LOGIC
@@ -377,8 +484,8 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
         # Cek apakah postingan SUDAH memiliki tag/label REPRICE atau REPOST
         has_reprice_or_repost = any(l.strip().upper() in ["REPRICE", "REPOST"] for l in current_labels)
 
-        # 1. Update Labels: Hapus NEW ARRIVAL, Tambahkan REPRICE
-        new_labels = [l for l in current_labels if l.strip().upper() != "NEW ARRIVAL"]
+        # 1. Update Labels: Hapus NEW ARRIVAL dan REPOST, Tambahkan REPRICE
+        new_labels = [l for l in current_labels if l.strip().upper() not in ["NEW ARRIVAL", "REPOST"]]
         if not any(l.strip().upper() == "REPRICE" for l in new_labels):
             new_labels.append("REPRICE")
 
@@ -525,6 +632,84 @@ def delete_blogger_post(service, post):
     except Exception as e:
         print(f"⚠️ Error hapus postingan Blogger: {e}")
         return {"status": "error", "message": str(e), "post_title": post_title, "publish_date": publish_date}
+
+def update_blogger_repost(service, post):
+    """
+    Melakukan update postingan di Blogspot untuk perintah REPOST:
+    1. Update Labels: Hapus NEW ARRIVAL, Tambahkan REPOST.
+    2. Update HTML: Catat / perbarui 'Last Post: [tanggal sebelum update]'.
+       (Harga TIDAK diubah).
+    3. Patch ke Blogger API: Setel tanggal dipublikasikan ke waktu sekarang.
+    """
+    try:
+        post_id = post["id"]
+        current_html = post.get("content", "")
+        current_labels = post.get("labels", [])
+
+        # Ambil tanggal terakhir postingan sebelum update dilakukan
+        original_published_str = post.get("published", "")
+        formatted_prev_date = format_published_date(original_published_str)
+
+        # 1. Update Labels: Hapus NEW ARRIVAL dan REPRICE, Tambahkan REPOST
+        new_labels = [l for l in current_labels if l.strip().upper() not in ["NEW ARRIVAL", "REPRICE"]]
+        if not any(l.strip().upper() == "REPOST" for l in new_labels):
+            new_labels.append("REPOST")
+
+        is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in current_labels)
+        is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in current_labels)
+
+        # 2. Update HTML Konten: Update atau Tambahkan 'Last Post: [tanggal sebelumnya]'
+        updated_html = current_html
+        if formatted_prev_date:
+            last_post_regex = r'((?:<b>)?Last\s*Post\s*:\s*(?:</b>)?\s*)([^\n<]+)'
+            if re.search(last_post_regex, updated_html, re.IGNORECASE):
+                updated_html = re.sub(last_post_regex, fr'\g<1>{formatted_prev_date}', updated_html, count=1, flags=re.IGNORECASE)
+                print(f"   📅 Mengubah 'Last Post' menjadi tanggal sebelum update: {formatted_prev_date}")
+            else:
+                # Sisipkan tepat setelah baris Code:
+                if re.search(r'((?:<b>)?Code\s*:\s*(?:</b>)?\s*[^\n<]+)', updated_html, re.IGNORECASE):
+                    updated_html = re.sub(
+                        r'((?:<b>)?Code\s*:\s*(?:</b>)?\s*[^\n<]+)',
+                        fr'\g<1><br/>Last Post: {formatted_prev_date}',
+                        updated_html,
+                        count=1,
+                        flags=re.IGNORECASE
+                    )
+                elif re.search(r'((?:<b>)?Assets\s*:\s*)', updated_html, re.IGNORECASE):
+                    updated_html = re.sub(
+                        r'((?:<b>)?Assets\s*:\s*)',
+                        fr'Last Post: {formatted_prev_date}<br/>\g<1>',
+                        updated_html,
+                        count=1,
+                        flags=re.IGNORECASE
+                    )
+                else:
+                    updated_html += f"<br/>Last Post: {formatted_prev_date}"
+                print(f"   📅 Menambahkan 'Last Post: {formatted_prev_date}' ke postingan.")
+
+        # 3. Patch ke Blogger API (Setel Tanggal Dipublikasikan ke 'Otomatis' / Waktu Sekarang)
+        now_wib = datetime.now(WIB)
+        published_timestamp = now_wib.strftime("%Y-%m-%dT%H:%M:%S+07:00")
+
+        patch_body = {
+            "content": updated_html,
+            "labels": new_labels,
+            "published": published_timestamp
+        }
+        res = service.posts().patch(blogId=BLOG_ID, postId=post_id, body=patch_body).execute()
+        return {
+            "status": "success",
+            "post_title": res.get("title", ""),
+            "publish_date": formatted_prev_date,
+            "new_publish_date": format_published_date(published_timestamp),
+            "is_consign_ps": is_consign_ps,
+            "is_consign_po": is_consign_po,
+            "labels": res.get("labels", []),
+            "published": res.get("published", "")
+        }
+    except Exception as e:
+        print(f"⚠️ Error update Blogger repost: {e}")
+        return {"status": "error", "message": str(e), "is_consign_ps": False, "is_consign_po": False}
 
 # ==============================================================================
 # 4. SHOPIFY GRAPHQL REPRICE LOGIC
@@ -864,7 +1049,7 @@ def update_shopify_takedown(sku, blogger_post=None):
 # ==============================================================================
 # 5. GOOGLE SPREADSHEET REPRICE LOGIC (CONSIGNMENT PS & CONSIGNMENT PO)
 # ==============================================================================
-def update_consignment_sheet(sku, command_type, formatted_price, numeric_price, sheet_name="PHOTO STUDIO"):
+def update_consignment_sheet(sku, command_type, formatted_price="", numeric_price=0, sheet_name="PHOTO STUDIO"):
     """
     Mengirim perintah update ke Google Apps Script Spreadsheet Consignment Listing.
     Mendukung:
@@ -875,14 +1060,20 @@ def update_consignment_sheet(sku, command_type, formatted_price, numeric_price, 
     - Kolom A (Status) harus Available / Reprice
     - Kolom C (Serial Number) = SKU
     - Kolom M (2ND), N (3RD), O (4TH) dicek berurutan mana yang belum dicentang
-    - Kolom G (Notes) ditambahkan: REPRICE [harga] [DD/MM/YY]
+    - Kolom G (Notes) ditambahkan: REPRICE [harga] [DD/MM/YY] atau REPOST [DD/MM/YY]
     """
     now_wib = datetime.now(WIB)
     date_str = now_wib.strftime("%d/%m/%y") # Format DD/MM/YY (contoh: 27/10/26)
 
-    notes_text = f"REPRICE {formatted_price} ({date_str})" if command_type == "REPRICE" else f"HARGA BARU {formatted_price} ({date_str})"
-
-    action_name = "reprice_photo_owner" if sheet_name == "PHOTO OWNER" else "reprice_photo_studio"
+    if command_type == "REPOST":
+        notes_text = f"REPOST ({date_str})"
+        action_name = "repost_consignment"
+    elif command_type == "REPRICE":
+        notes_text = f"REPRICE {formatted_price} ({date_str})"
+        action_name = "reprice_photo_owner" if sheet_name == "PHOTO OWNER" else "reprice_photo_studio"
+    else:
+        notes_text = f"HARGA BARU {formatted_price} ({date_str})"
+        action_name = "reprice_photo_owner" if sheet_name == "PHOTO OWNER" else "reprice_photo_studio"
 
     payload = {
         "action": action_name,
@@ -910,6 +1101,9 @@ def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_pric
 
 def update_consignment_po_sheet(sku, command_type, formatted_price, numeric_price):
     return update_consignment_sheet(sku, command_type, formatted_price, numeric_price, sheet_name="PHOTO OWNER")
+
+def update_consignment_repost_sheet(sku, sheet_name="PHOTO STUDIO"):
+    return update_consignment_sheet(sku, "REPOST", "", 0, sheet_name=sheet_name)
 
 def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, canonical_sku=None):
     """
@@ -1114,8 +1308,13 @@ def wa_webhook():
 
             service = get_blogger_service()
             post = None
+            photo_url = None
             if service:
                 post = find_blogger_post_by_code(service, sku)
+                if post:
+                    photo_url = extract_first_image_from_post(post)
+                    if photo_url:
+                        print(f"📸 Ditemukan foto jam tangan dari Blogspot: {photo_url}")
 
             # 1. Update Shopify: Status DRAFT & Stock 0
             shopify_res = update_shopify_takedown(sku, blogger_post=post)
@@ -1128,7 +1327,7 @@ def wa_webhook():
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
 
-            # 3. Kirim Balasan Laporan Lengkap ke WhatsApp
+            # 3. Kirim Balasan Laporan Lengkap ke WhatsApp (beserta foto jika ada)
             status_shop_icon = "✅" if shopify_res.get("status") == "success" else "⚠️"
             status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
 
@@ -1154,23 +1353,111 @@ def wa_webhook():
             else:
                 pesan_konfirmasi += f"{blogger_res.get('message', 'Gagal')}\n"
 
-            kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
+            kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=photo_url)
 
             return jsonify({
                 "status": "success",
                 "command": "TAKEDOWN",
                 "sku": sku,
+                "photo_url": photo_url,
                 "shopify": shopify_res,
                 "blogger": blogger_res
             }), 200
 
         # ======================================================================
-        # JALUR C: INPUT DRAFT JAM BARU (FOTO STUDIO WA)
+        # JALUR C: PERINTAH REPOST
+        # ======================================================================
+        repost_cmd = parse_repost_chat(caption)
+        if repost_cmd:
+            sku = repost_cmd["code"]
+            print(f"🔁 Menerima Perintah REPOST untuk SKU: '{sku}' dari: {sender_name}")
+
+            service = get_blogger_service()
+            post = None
+            blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
+            is_consign_ps = False
+            is_consign_po = False
+
+            if service:
+                post = find_blogger_post_by_code(service, sku)
+                if post:
+                    blogger_res = update_blogger_repost(service, post)
+                    post_labels = post.get("labels", [])
+                    is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
+                    is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
+                else:
+                    blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
+
+            canonical_sku = (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
+
+            # Update Spreadsheet Consignment PS (HANYA jika CONSIGNMENT_PS)
+            sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
+            if is_consign_ps and blogger_res.get("status") == "success":
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO)...")
+                sheet_consign_ps_res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO STUDIO")
+            else:
+                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau Blogspot gagal.")
+
+            # Update Spreadsheet Consignment PO (HANYA jika CONSIGNMENT_PO)
+            sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
+            if is_consign_po and blogger_res.get("status") == "success":
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER)...")
+                sheet_consign_po_res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO OWNER")
+            else:
+                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PO atau Blogspot gagal.")
+
+            # Kirim Balasan Laporan Lengkap ke WhatsApp
+            status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
+
+            pesan_konfirmasi = (
+                f"🔁 *LAPORAN REPOST IDWX*\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🔢 *Kode / SKU:* {sku}\n"
+                f"👤 *Diupdate oleh:* {sender_name}\n\n"
+                f"{status_blog_icon} *Blogspot:* {blogger_res.get('post_title', blogger_res.get('message', 'Sukses'))}\n"
+            )
+            if blogger_res.get("publish_date"):
+                pesan_konfirmasi += f"   • Last Post: {blogger_res.get('publish_date')}\n"
+
+            pesan_konfirmasi += "⏭️ *Shopify:* Dilewati (Tidak ada perubahan untuk REPOST)\n"
+
+            if is_consign_ps:
+                status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
+                if sheet_consign_ps_res.get("status") == "success":
+                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_ps_res.get('row', '-')} ({sheet_consign_ps_res.get('tracking_checked', '')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
+
+            if is_consign_po:
+                status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
+                if sheet_consign_po_res.get("status") == "success":
+                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_po_res.get('row', '-')} ({sheet_consign_po_res.get('tracking_checked', '')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
+
+            if not is_consign_ps and not is_consign_po:
+                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / CONSIGNMENT_PO)\n"
+
+            kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
+
+            return jsonify({
+                "status": "success",
+                "command": "REPOST",
+                "sku": sku,
+                "blogger": blogger_res,
+                "spreadsheet_consignment_ps": sheet_consign_ps_res,
+                "spreadsheet_consignment_po": sheet_consign_po_res
+            }), 200
+
+        # ======================================================================
+        # JALUR D: INPUT DRAFT JAM BARU (FOTO STUDIO WA)
         # ======================================================================
         # Validasi ketat: Wajib melampirkan foto & format caption jam tangan valid
         if not is_valid_foto_studio_caption(caption, image_url):
-            print(f"⏭️ Diabaikan: Pesan bukan perintah REPRICE/TAKEDOWN dan bukan format foto studio jam baru yang valid.")
-            return jsonify({"status": "ignored", "reason": "Not recognized as reprice/takedown or valid photo studio submission"}), 200
+            print(f"⏭️ Diabaikan: Pesan bukan perintah REPRICE/TAKEDOWN/REPOST dan bukan format foto studio jam baru yang valid.")
+            return jsonify({"status": "ignored", "reason": "Not recognized as reprice/takedown/repost or valid photo studio submission"}), 200
 
         serial_number = ekstraksi_serial_number(caption)
         tanggal_hari_ini = format_tanggal_indonesia()
