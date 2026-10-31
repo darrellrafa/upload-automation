@@ -101,7 +101,7 @@ def parse_reprice_chat(message_text):
         cmd = spaced_parts[0].upper().strip()
         if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
             raw_price = spaced_parts[-1].strip()
-            code = " / ".join(spaced_parts[1:-1]).strip()
+            code = clean_sku_string(" / ".join(spaced_parts[1:-1])).upper()
             numeric_price = parse_price(raw_price)
             if numeric_price > 0:
                 cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
@@ -128,7 +128,7 @@ def parse_reprice_chat(message_text):
     if numeric_price <= 0:
         return None
 
-    code = "/".join(parts[1:-1]).strip()
+    code = clean_sku_string("/".join(parts[1:-1])).upper()
     cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
 
     return {
@@ -141,21 +141,35 @@ def parse_reprice_chat(message_text):
 
 def parse_takedown_chat(message_text):
     """
-    Memvalidasi dan mengekstrak perintah chat TAKEDOWN:
+    Memvalidasi dan mengekstrak perintah chat TAKEDOWN / SOLD / ON HOLD:
     Format yang didukung:
-    1. TAKEDOWN / [KODE/SKU]
-    2. TAKE DOWN / [KODE/SKU]
-    3. TAKEDOWN [KODE/SKU]
-    4. TAKEDOWN / [KODE/SKU] / [KETERANGAN/ALASAN]
+    1. TAKEDOWN / [KODE] (atau TAKE DOWN) -> status: Takedown
+    2. SOLD / [KODE] -> status: Sold
+    3. ON HOLD / [KODE] (atau HOLD) -> status: On Hold
     Mendukung SKU dengan karakter garis miring (misal 5720232/4642909).
+    Bebas huruf besar/kecil (case-insensitive).
     """
     if not message_text:
         return None
 
     clean_text = message_text.strip()
-    m = re.match(r'^(takedown|take\s*down)\b\s*(.*)$', clean_text, re.IGNORECASE)
+    m = re.match(r'^(takedown|take\s*down|sold|on\s*hold|on_hold|hold)\b\s*(.*)$', clean_text, re.IGNORECASE)
     if not m:
         return None
+
+    raw_keyword = m.group(1).lower().replace(" ", "").replace("_", "")
+    if raw_keyword in ["takedown"]:
+        cmd_type = "TAKEDOWN"
+        status_text = "Takedown"
+    elif raw_keyword in ["sold"]:
+        cmd_type = "SOLD"
+        status_text = "Sold"
+    elif raw_keyword in ["onhold", "hold"]:
+        cmd_type = "ON_HOLD"
+        status_text = "On Hold"
+    else:
+        cmd_type = "TAKEDOWN"
+        status_text = "Takedown"
 
     rest = m.group(2).strip()
     if not rest:
@@ -174,17 +188,18 @@ def parse_takedown_chat(message_text):
         if last_part in ["sold", "laku", "cancel", "batal", "booked", "retur", "hold"]:
             code = " / ".join(spaced_parts[:-1]).strip()
         else:
-            # Jika user ketik 'takedown / 5720232 / 4642909', gabungkan kembali sebagai serial ganda
+            # Jika user ketik serial ganda misal '5720232 / 4642909'
             code = "/".join(spaced_parts).strip()
     else:
         code = rest.strip()
 
-    code = clean_sku_string(code)
+    code = clean_sku_string(code).upper()
     if not code:
         return None
 
     return {
-        "command_type": "TAKEDOWN",
+        "command_type": cmd_type,
+        "status_text": status_text,
         "code": code
     }
 
@@ -195,6 +210,7 @@ def parse_repost_chat(message_text):
     1. REPOST / [KODE]
     2. REPOST [KODE]
     Mendukung SKU dengan karakter garis miring (misal 5720232/4642909).
+    Bebas huruf besar/kecil (case-insensitive).
     """
     if not message_text:
         return None
@@ -220,7 +236,7 @@ def parse_repost_chat(message_text):
     else:
         code = rest.strip()
 
-    code = clean_sku_string(code)
+    code = clean_sku_string(code).upper()
     if not code:
         return None
 
@@ -472,7 +488,7 @@ def extract_sku_from_blogger_post(post):
     owner = owner_match.group(1).strip() if owner_match else None
     return sku, owner
 
-def find_blogger_post_by_code(service, code):
+def find_blogger_post_by_code(service, code, include_drafts=True):
     if not service or not BLOG_ID or not code:
         return None
     clean_code = clean_sku_string(code)
@@ -489,6 +505,7 @@ def find_blogger_post_by_code(service, code):
     if code.strip() not in search_candidates:
         search_candidates.append(code.strip())
 
+    # 1. Cari di postingan yang LIVE / Terbit
     for cand in search_candidates:
         try:
             res = service.posts().search(blogId=BLOG_ID, q=cand).execute()
@@ -502,6 +519,21 @@ def find_blogger_post_by_code(service, code):
                 return items[0]
         except Exception as e:
             print(f"⚠️ Error search Blogger post ({cand}): {e}")
+
+    # 2. Fallback: Cari di postingan DRAFT (yang sudah dipindahkan ke Trash sebelumnya)
+    if include_drafts:
+        try:
+            draft_res = service.posts().list(blogId=BLOG_ID, status=['DRAFT'], maxResults=50).execute()
+            draft_items = draft_res.get("items", [])
+            for cand in search_candidates:
+                for item in draft_items:
+                    content = item.get("content", "")
+                    title = item.get("title", "")
+                    if cand.upper() in content.upper() or cand.upper() in title.upper():
+                        return item
+        except Exception as e:
+            print(f"⚠️ Error list Blogger drafts: {e}")
+
     return None
 
 def format_published_date(published_str):
@@ -670,6 +702,19 @@ def delete_blogger_post(service, post):
     post_id = post.get("id")
     post_title = post.get("title", "")
     publish_date = format_published_date(post.get("published", ""))
+    post_status = post.get("status", "LIVE")
+
+    # Jika postingan sudah berstatus DRAFT (sudah pernah dipindahkan ke sampah sebelumnya)
+    if str(post_status).upper() == "DRAFT":
+        print(f"ℹ️ Postingan Blogspot '{post_title}' sudah berada di Sampah / Trash (Status DRAFT).")
+        return {
+            "status": "success",
+            "post_title": post_title,
+            "publish_date": publish_date,
+            "post_id": post_id,
+            "in_trash": True,
+            "already_in_trash": True
+        }
 
     try:
         # Gunakan useTrash=True agar postingan dipindahkan ke folder Sampah (Trash), bukan dihapus permanen
@@ -1158,6 +1203,35 @@ def update_consignment_po_sheet(sku, command_type, formatted_price, numeric_pric
 def update_consignment_repost_sheet(sku, sheet_name="PHOTO STUDIO"):
     return update_consignment_sheet(sku, "REPOST", "", 0, sheet_name=sheet_name)
 
+def update_consignment_status_sheet(sku, status_text, sheet_name="PHOTO STUDIO"):
+    """
+    Mengirim perintah update status (Sold, On Hold, Takedown) ke Google Apps Script
+    Spreadsheet Consignment Listing (Tab PHOTO STUDIO).
+    Kriteria:
+    - Kolom A (Status) diubah menjadi status_text ('Sold', 'On Hold', 'Takedown').
+    - Kolom Tracking Post (L, M, N, O): Kolom yang belum dicentang dihapus centangnya.
+    """
+    now_wib = datetime.now(WIB)
+    date_str = now_wib.strftime("%d/%m/%y")
+
+    payload = {
+        "action": "update_consignment_status",
+        "sheet_name": sheet_name,
+        "sku": sku,
+        "status_text": status_text,
+        "date_str": date_str
+    }
+
+    try:
+        res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json=payload, timeout=25)
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {"status": "error", "message": f"HTTP status {res.status_code}"}
+    except Exception as e:
+        print(f"⚠️ Error Webhook Sheets Consignment Status ({sheet_name}): {e}")
+        return {"status": "error", "message": str(e)}
+
 def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, canonical_sku=None):
     """
     Mengirim perintah update harga ke Google Apps Script Spreadsheet 'Stock List Slow Moving Items'.
@@ -1352,31 +1426,110 @@ def wa_webhook():
 
 
         # ======================================================================
-        # JALUR B: PERINTAH TAKEDOWN
+        # JALUR B: PERINTAH TAKEDOWN / SOLD / ON HOLD
         # ======================================================================
         takedown_cmd = parse_takedown_chat(caption)
         if takedown_cmd:
             sku = takedown_cmd["code"]
-            print(f"🗑️ Menerima Perintah TAKEDOWN untuk SKU: '{sku}' dari: {sender_name}")
+            cmd_type = takedown_cmd["command_type"]
+            status_text = takedown_cmd["status_text"]
+            cmd_title = cmd_type.replace("_", " ")
+            print(f"🗑️ Menerima Perintah {cmd_type} (Status: {status_text}) untuk SKU: '{sku}' dari: {sender_name}")
 
             service = get_blogger_service()
             post = None
             photo_url = None
             post_description = ""
+            is_consign_ps = False
+            is_consign_po = False
             if service:
                 post = find_blogger_post_by_code(service, sku)
                 if post:
                     photo_url = extract_first_image_from_post(post)
                     post_description = extract_takedown_description_from_post(post)
+                    post_labels = post.get("labels", [])
+                    is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
+                    is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
                     if photo_url:
                         print(f"📸 Ditemukan foto jam tangan dari Blogspot: {photo_url}")
                     if post_description:
                         print(f"📝 Ditemukan deskripsi jam tangan dari Blogspot ({len(post_description.splitlines())} baris)")
 
+            # KONDISI KHUSUS: Postingan Blogspot sudah tidak ada (misal barang sebelumnya ON HOLD lalu diubah jadi SOLD)
+            # Karena di Blogspot & Shopify sudah tidak aktif, tugasnya HANYA merubah status pada spreadsheet (PHOTO STUDIO / PHOTO OWNER).
+            if not post:
+                print(f"ℹ️ Postingan Blogspot untuk SKU '{sku}' tidak ditemukan (sudah dihapus/On Hold sebelumnya).")
+                print(f"📊 Menjalankan update status ke Google Spreadsheet Consignment...")
+
+                # Tentukan tab awal: jika SKU diawali 'CPO' maka PHOTO OWNER, selain itu PHOTO STUDIO
+                target_sheet = "PHOTO OWNER" if sku.upper().startswith("CPO") else "PHOTO STUDIO"
+                sheet_res = update_consignment_status_sheet(sku, status_text, sheet_name=target_sheet)
+
+                # Jika tidak ditemukan di target_sheet pertama, coba cek tab lainnya (PHOTO STUDIO <-> PHOTO OWNER)
+                if sheet_res.get("status") != "success":
+                    alt_sheet = "PHOTO STUDIO" if target_sheet == "PHOTO OWNER" else "PHOTO OWNER"
+                    alt_res = update_consignment_status_sheet(sku, status_text, sheet_name=alt_sheet)
+                    if alt_res.get("status") == "success":
+                        sheet_res = alt_res
+                        target_sheet = alt_sheet
+
+                if sheet_res.get("status") == "success":
+                    old_status = sheet_res.get("old_status") or "On Hold"
+                    row_idx = sheet_res.get("row", "-")
+                    sheet_photo_url = sheet_res.get("photo_url")
+                    item_name = sheet_res.get("item_name")
+                    sheet_label = "PO" if target_sheet == "PHOTO OWNER" else "PS"
+
+                    pesan_konfirmasi = (
+                        f"{cmd_icon} *LAPORAN {cmd_title} IDWX*\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"🔢 *Kode / SKU:* {sku}\n"
+                        f"👤 *Diupdate oleh:* {sender_name}\n\n"
+                        f"✅ *Spreadsheet (Consignment {sheet_label}):*\n"
+                        f"   • Status: *{old_status}* ➔ *{status_text}*\n"
+                        f"   • Tab: *{target_sheet}* (Baris {row_idx})\n"
+                    )
+                    if item_name:
+                        pesan_konfirmasi += f"   • Jam: *{item_name}*\n"
+
+                    pesan_konfirmasi += (
+                        f"\nℹ️ *Blogspot:* Sudah tidak aktif / dihapus sebelumnya\n"
+                        f"ℹ️ *Shopify:* Sudah berstatus DRAFT / Non-aktif\n"
+                    )
+
+                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=sheet_photo_url)
+
+                    return jsonify({
+                        "status": "success",
+                        "command": cmd_type,
+                        "status_text": status_text,
+                        "sku": sku,
+                        "target_sheet": target_sheet,
+                        "trigger": "blogspot_post_not_found_spreadsheet_only",
+                        "spreadsheet_consignment": sheet_res
+                    }), 200
+                else:
+                    err_msg = sheet_res.get("message", "SKU tidak ditemukan di tab PHOTO STUDIO maupun PHOTO OWNER")
+                    pesan_konfirmasi = (
+                        f"⚠️ *GAGAL {cmd_title} IDWX*\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"🔢 *Kode / SKU:* {sku}\n"
+                        f"👤 *Pengirim:* {sender_name}\n\n"
+                        f"❌ *Blogspot:* Postingan tidak ditemukan\n"
+                        f"❌ *Spreadsheet (Consignment):* {err_msg}\n"
+                    )
+                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
+                    return jsonify({
+                        "status": "not_found",
+                        "command": cmd_type,
+                        "sku": sku,
+                        "message": f"Postingan Blogspot tidak ada dan {err_msg}"
+                    }), 200
+
             # 1. Update Shopify: Status DRAFT & Stock 0
             shopify_res = update_shopify_takedown(sku, blogger_post=post)
 
-            # 2. Hapus Postingan Blogspot
+            # 2. Hapus Postingan Blogspot (Masuk ke Sampah / Trash)
             blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
             if service:
                 if post:
@@ -1384,7 +1537,21 @@ def wa_webhook():
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
 
-            # 3. Kirim Balasan Laporan Lengkap ke WhatsApp (beserta foto jika ada)
+            # 3. Update Google Spreadsheet Consignment Listing (PHOTO STUDIO / PHOTO OWNER)
+            canonical_sku = (extract_sku_from_blogger_post(post)[0] if post else None) or shopify_res.get("matched_sku") or clean_sku_string(sku)
+            sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
+            sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
+
+            if is_consign_ps:
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO) status ke '{status_text}'...")
+                sheet_consign_ps_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO STUDIO")
+            elif is_consign_po:
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER) status ke '{status_text}'...")
+                sheet_consign_po_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
+            else:
+                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO. Update spreadsheet dilewati.")
+
+            # 4. Kirim Balasan Laporan Lengkap ke WhatsApp (beserta foto jika ada)
             status_shop_icon = "✅" if shopify_res.get("status") == "success" else "⚠️"
             status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
 
@@ -1392,8 +1559,9 @@ def wa_webhook():
             if shopify_res.get("matched_sku") and shopify_res.get("matched_sku").upper() != clean_sku_string(sku).upper():
                 sku_display += f" _(Shopify: {shopify_res.get('matched_sku')})_"
 
+            cmd_icon = "🏷️" if cmd_type == "SOLD" else ("⏸️" if cmd_type == "ON_HOLD" else "🗑️")
             pesan_konfirmasi = (
-                f"🗑️ *LAPORAN TAKEDOWN IDWX*\n"
+                f"{cmd_icon} *LAPORAN {cmd_title} IDWX*\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🔢 *Kode / SKU:* {sku_display}\n"
                 f"👤 *Diupdate oleh:* {sender_name}\n\n"
@@ -1403,12 +1571,32 @@ def wa_webhook():
                 pesan_konfirmasi += "   • Status: *DRAFT*\n   • Stock: *0*\n"
 
             pesan_konfirmasi += f"{status_blog_icon} *Blogspot:* "
-            if blogger_res.get("status") == "success":
+            if blogger_res.get("already_in_trash"):
+                pesan_konfirmasi += f"Sudah di Sampah (Trash) sebelumnya\n   • Judul: {blogger_res.get('post_title', '-')}\n"
+            elif blogger_res.get("status") == "success":
                 pesan_konfirmasi += f"Dipindahkan ke Sampah (Trash)\n   • Judul: {blogger_res.get('post_title', '-')}\n"
                 if blogger_res.get("publish_date"):
                     pesan_konfirmasi += f"   • Publish Date: {blogger_res.get('publish_date')}\n"
             else:
                 pesan_konfirmasi += f"{blogger_res.get('message', 'Gagal')}\n"
+
+            # Status Spreadsheet Consignment
+            if is_consign_ps:
+                status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
+                if sheet_consign_ps_res.get("status") == "success":
+                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_ps_res.get('row', '-')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
+            elif is_consign_po:
+                status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
+                if sheet_consign_po_res.get("status") == "success":
+                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_po_res.get('row', '-')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
+            else:
+                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / PO)\n"
 
             if post_description:
                 pesan_konfirmasi += f"\n━━━━━━━━━━━━━━━━━━\n{post_description}\n"
@@ -1417,12 +1605,15 @@ def wa_webhook():
 
             return jsonify({
                 "status": "success",
-                "command": "TAKEDOWN",
+                "command": cmd_type,
+                "status_text": status_text,
                 "sku": sku,
                 "photo_url": photo_url,
                 "description": post_description,
                 "shopify": shopify_res,
-                "blogger": blogger_res
+                "blogger": blogger_res,
+                "spreadsheet_consignment_ps": sheet_consign_ps_res,
+                "spreadsheet_consignment_po": sheet_consign_po_res
             }), 200
 
         # ======================================================================
