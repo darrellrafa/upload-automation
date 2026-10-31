@@ -314,13 +314,15 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None):
         return
     try:
         if image_url:
+            # Batasi caption maksimal 1024 karakter sesuai limit Green API sendFileByUrl
+            caption_wa = pesan_text if len(pesan_text) <= 1024 else pesan_text[:1020] + "..."
             # Kirim gambar beserta caption melalui Green API sendFileByUrl
             url_file = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendFileByUrl/{GREEN_API_API_TOKEN}"
             payload_file = {
                 "chatId": chat_id,
                 "urlFile": image_url,
                 "fileName": "watch.jpg",
-                "caption": pesan_text
+                "caption": caption_wa
             }
             res = requests.post(url_file, json=payload_file, timeout=20)
             if res.status_code == 200:
@@ -383,6 +385,55 @@ def extract_first_image_from_post(post):
             return url
 
     return None
+
+def extract_takedown_description_from_post(post):
+    """
+    Mengekstrak teks deskripsi spesifikasi jam tangan dari postingan Blogspot
+    (Judul, Ref, Size, Box & Paper, Condition, Price, Code, Last Post).
+    Mengabaikan data internal seperti Assets GDrive, Order Received, Form, dan Notes.
+    """
+    if not post:
+        return ""
+
+    content = post.get("content", "")
+    if not content:
+        return post.get("title", "")
+
+    soup = BeautifulSoup(content, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for tag in soup.find_all(["div", "p", "li", "ul", "h1", "h2", "h3", "h4", "hr", "table", "tr"]):
+        tag.insert_before("\n")
+        tag.insert_after("\n")
+
+    raw_lines = [re.sub(r'[\xa0\s]+', ' ', line.strip()).strip() for line in soup.get_text().split("\n") if line.strip()]
+
+    stop_patterns = [
+        r'^assets?\b',
+        r'^order\s+received\b',
+        r'^form\b',
+        r'^notes?\b',
+        r'^nama\s*:',
+        r'^no\s*hp\s*:',
+        r'^instagram\s*:',
+        r'^[=\-_]{3,}$',
+        r'^https?://'
+    ]
+
+    desc_lines = []
+    for line in raw_lines:
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        # Berhenti jika mencapai data internal/link Drive/form
+        if any(re.search(pat, clean_line, re.IGNORECASE) for pat in stop_patterns):
+            break
+        desc_lines.append(clean_line)
+
+    if not desc_lines:
+        return post.get("title", "")
+
+    return "\n".join(desc_lines)
 
 # ==============================================================================
 # 3. BLOGGER SERVICE & REPRICE LOGIC
@@ -1311,12 +1362,16 @@ def wa_webhook():
             service = get_blogger_service()
             post = None
             photo_url = None
+            post_description = ""
             if service:
                 post = find_blogger_post_by_code(service, sku)
                 if post:
                     photo_url = extract_first_image_from_post(post)
+                    post_description = extract_takedown_description_from_post(post)
                     if photo_url:
                         print(f"📸 Ditemukan foto jam tangan dari Blogspot: {photo_url}")
+                    if post_description:
+                        print(f"📝 Ditemukan deskripsi jam tangan dari Blogspot ({len(post_description.splitlines())} baris)")
 
             # 1. Update Shopify: Status DRAFT & Stock 0
             shopify_res = update_shopify_takedown(sku, blogger_post=post)
@@ -1355,6 +1410,9 @@ def wa_webhook():
             else:
                 pesan_konfirmasi += f"{blogger_res.get('message', 'Gagal')}\n"
 
+            if post_description:
+                pesan_konfirmasi += f"\n━━━━━━━━━━━━━━━━━━\n{post_description}\n"
+
             kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=photo_url)
 
             return jsonify({
@@ -1362,6 +1420,7 @@ def wa_webhook():
                 "command": "TAKEDOWN",
                 "sku": sku,
                 "photo_url": photo_url,
+                "description": post_description,
                 "shopify": shopify_res,
                 "blogger": blogger_res
             }), 200
