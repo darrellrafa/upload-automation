@@ -158,7 +158,7 @@ Pull requests and improvements are welcome. If you want to add a feature or fix 
 
 ## Maintainer
 
-Darrell Rafael
+Darrell Rafa
 
 ## Note
 
