@@ -156,7 +156,7 @@ Pull request dan perbaikan sangat terbuka. Jika Anda ingin menambahkan fitur bar
 
 ## Maintainer
 
-Darrell Rafael
+Darrell Rafa
 
 ## Catatan
 
