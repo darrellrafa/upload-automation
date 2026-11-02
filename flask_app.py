@@ -65,18 +65,57 @@ SHOPIFY_ACCESS_TOKEN = None
 def parse_price(price_str):
     """
     Mengubah format harga string menjadi float angka:
-    Contoh: '92.000.000' -> 92000000.0, '92jt' -> 92000000.0, 'Rp 92.000.000' -> 92000000.0
+    Contoh: '92.000.000' -> 92000000.0, '56.8 jt' -> 56800000.0, '56,8 jt' -> 56800000.0, 'Rp 92.000.000' -> 92000000.0
     """
+    if not price_str:
+        return 0.0
     clean_lower = price_str.lower().strip()
-    if 'jt' in clean_lower:
-        m = re.search(r'([\d,\.]+)\s*jt', clean_lower)
-        if m:
-            val_str = m.group(1).replace('.', '').replace(',', '.')
-            try:
-                return float(val_str) * 1_000_000
-            except ValueError:
-                pass
 
+    # 1. Format miliar (m / milyar / miliar)
+    m_miliar = re.search(r'([\d,\.]+)\s*(?:m|miliar|milyar)\b', clean_lower)
+    if m_miliar:
+        raw_val = m_miliar.group(1).strip()
+        if '.' in raw_val and ',' in raw_val:
+            val_str = raw_val.replace('.', '').replace(',', '.')
+        elif ',' in raw_val:
+            val_str = raw_val.replace(',', '.')
+        elif '.' in raw_val:
+            parts = raw_val.split('.')
+            val_str = raw_val if len(parts) == 2 else raw_val.replace('.', '')
+        else:
+            val_str = raw_val
+        try:
+            return float(val_str) * 1_000_000_000
+        except ValueError:
+            pass
+
+    # 2. Format juta (jt / juta)
+    m_juta = re.search(r'([\d,\.]+)\s*(?:jt|juta)', clean_lower)
+    if m_juta:
+        raw_val = m_juta.group(1).strip()
+        # Jika ada titik dan koma sekaligus (misal 1.250,5 jt), hapus titik pemisah ribuan dan ubah koma jadi desimal
+        if '.' in raw_val and ',' in raw_val:
+            val_str = raw_val.replace('.', '').replace(',', '.')
+        elif ',' in raw_val:
+            # Koma tunggal sebagai desimal (misal: 56,8 jt -> 56.8 jt)
+            val_str = raw_val.replace(',', '.')
+        elif '.' in raw_val:
+            parts = raw_val.split('.')
+            # Jika ada 1 titik desimal (misal 56.8 jt, 56.85 jt, 56.800 jt), jangan hapus titik
+            if len(parts) == 2:
+                val_str = raw_val
+            else:
+                # Lebih dari 1 titik pemisah ribuan (misal 56.000.000 jt)
+                val_str = raw_val.replace('.', '')
+        else:
+            val_str = raw_val
+
+        try:
+            return float(val_str) * 1_000_000
+        except ValueError:
+            pass
+
+    # 3. Format angka nominal biasa tanpa satuan (misal Rp 56.800.000, 56800000, 56.800.000)
     numeric_str = re.sub(r'[^\d]', '', price_str)
     if numeric_str:
         return float(numeric_str)
@@ -325,34 +364,46 @@ def ekstraksi_serial_number(caption):
 
     return "INPUT-MANUAL"
 
-def kirim_balasan_wa(chat_id, pesan_text, image_url=None):
-    if not GREEN_API_ID_INSTANCE or not GREEN_API_API_TOKEN or "xxxx" in GREEN_API_ID_INSTANCE:
-        return
-    try:
-        if image_url:
-            # Batasi caption maksimal 1024 karakter sesuai limit Green API sendFileByUrl
-            caption_wa = pesan_text if len(pesan_text) <= 1024 else pesan_text[:1020] + "..."
-            # Kirim gambar beserta caption melalui Green API sendFileByUrl
-            url_file = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendFileByUrl/{GREEN_API_API_TOKEN}"
-            payload_file = {
-                "chatId": chat_id,
-                "urlFile": image_url,
-                "fileName": "watch.jpg",
-                "caption": caption_wa
-            }
-            res = requests.post(url_file, json=payload_file, timeout=20)
-            if res.status_code == 200:
-                print(f"📷 Berhasil mengirim feedback WA beserta foto jam tangan ke {chat_id}")
-                return
-            else:
-                print(f"⚠️ Green API sendFileByUrl gagal (Status {res.status_code}): {res.text}. Fallback ke pesan teks biasa...")
+def normalize_blogger_image_url(url):
+    """
+    Memastikan URL gambar Blogger memiliki parameter resolusi tinggi (/s1600/ atau =s0)
+    sehingga tidak menghasilkan HTTP 400 Bad Request saat di-download oleh Green API.
+    """
+    if not url:
+        return None
+    url = url.strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    if 'blogger.googleusercontent.com/img/b/' in url:
+        if re.search(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', url):
+            url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s1600/\1', url)
+        elif not re.search(r'/s1600/([^/]+)$', url):
+            url = re.sub(r'/([^/]+)$', r'/s1600/\1', url)
+    elif 'googleusercontent.com' in url or 'bp.blogspot.com' in url:
+        if re.search(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', url):
+            url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s1600/\1', url)
+        elif re.search(r'=(s\d+|w\d+-h\d+[^/]*)$', url):
+            url = re.sub(r'=(s\d+|w\d+-h\d+[^/]*)$', '=s0', url)
+    return url
 
-        # Fallback ke pesan teks biasa jika tidak ada gambar atau pengiriman gambar gagal
-        url = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
-        payload = {"chatId": chat_id, "message": pesan_text}
-        requests.post(url, json=payload, timeout=10)
+def is_image_url_accessible(url, timeout=5):
+    """
+    Memeriksa apakah URL gambar mengembalikan HTTP 200 OK sehingga aman dikirim via Green API.
+    """
+    if not url:
+        return False
+    try:
+        r = requests.head(url, timeout=timeout, allow_redirects=True)
+        if r.status_code == 200:
+            return True
+        if r.status_code in [400, 404]:
+            return False
+        # Server yang menolak HEAD dicoba via GET stream
+        r_get = requests.get(url, stream=True, timeout=timeout, allow_redirects=True)
+        return r_get.status_code == 200
     except Exception as e:
-        print(f"⚠️ Gagal kirim balasan WA: {e}")
+        print(f"⚠️ Cek akses gambar ({url[:60]}...): {e}")
+        return False
 
 def extract_first_image_from_post(post):
     """
@@ -377,20 +428,14 @@ def extract_first_image_from_post(post):
                     if re.search(r'\.(jpg|jpeg|png|webp)($|\?)', href, re.IGNORECASE) or 'googleusercontent.com' in href or 'bp.blogspot.com' in href:
                         raw_url = href
 
-                # Konversi format ukuran thumbnail (/s320/, /w640-h480/, dll) ke original size (/s1600/ atau =s0)
-                high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s1600/\1', raw_url)
-                high_res_url = re.sub(r'=(s\d+|w\d+-h\d+[^/]*)$', '=s0', high_res_url)
-                return high_res_url
+                return normalize_blogger_image_url(raw_url)
         except Exception as e:
             print(f"⚠️ Error parsing HTML untuk gambar pertama: {e}")
 
         # Fallback regex untuk tag <img> pertama dalam HTML jika parser ada kendala
         img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', content, re.IGNORECASE)
         if img_match:
-            raw_url = img_match.group(1).strip()
-            high_res_url = re.sub(r'/(?:s\d+|w\d+-h\d+[^/]*)/([^/]+)$', r'/s1600/\1', raw_url)
-            high_res_url = re.sub(r'=(s\d+|w\d+-h\d+[^/]*)$', '=s0', high_res_url)
-            return high_res_url
+            return normalize_blogger_image_url(img_match.group(1).strip())
 
     # 2. Fallback terakhir: Cek field images bawaan Blogger API jika konten HTML tidak memuat tag <img>
     images = post.get("images", [])
@@ -398,9 +443,163 @@ def extract_first_image_from_post(post):
         first_img = images[0]
         url = first_img.get("url") if isinstance(first_img, dict) else first_img
         if url:
-            return url
+            return normalize_blogger_image_url(url)
 
     return None
+
+def extract_shopify_image_url(product_node):
+    """
+    Mengekstrak URL gambar utama dari node produk Shopify.
+    Mendukung featuredImage dan images edges.
+    """
+    if not product_node or not isinstance(product_node, dict):
+        return None
+    # 1. featuredImage
+    feat = product_node.get("featuredImage")
+    if feat and isinstance(feat, dict) and feat.get("url"):
+        return feat["url"].strip()
+    # 2. images edges
+    images_edges = product_node.get("images", {}).get("edges", [])
+    if images_edges and len(images_edges) > 0:
+        first_img = images_edges[0].get("node", {}).get("url")
+        if first_img:
+            return first_img.strip()
+    return None
+
+def get_shopify_image_by_sku(sku, blogger_post=None):
+    """
+    Mencari produk di Shopify dan mengambil URL fotonya.
+    """
+    if not sku:
+        return None
+    try:
+        matched_product, _, _ = find_shopify_product_and_variant(sku, blogger_post=blogger_post)
+        if matched_product:
+            url = extract_shopify_image_url(matched_product)
+            if url:
+                print(f"🛍️ Ditemukan foto jam tangan dari Shopify: {url}")
+                return url
+    except Exception as e:
+        print(f"⚠️ Error ambil foto dari Shopify untuk SKU '{sku}': {e}")
+    return None
+
+def get_watch_photo_url(post=None, sku=None, shopify_product=None, fallback_url=None):
+    """
+    Mendapatkan URL foto jam tangan dengan strategi prioritas:
+    1. Foto pertama Blogspot (dinormalisasi resolusi tinggi & diverifikasi HTTP 200)
+    2. Jika Blogspot tidak ada / gagal diakses -> Ambil foto dari Shopify
+    3. Jika masih belum ada -> Cek fallback_url (misal URL foto dari Google Sheets)
+    """
+    # 1. Prioritas Utama: Blogspot
+    if post:
+        blog_img = extract_first_image_from_post(post)
+        if blog_img:
+            norm_blog_img = normalize_blogger_image_url(blog_img)
+            if is_image_url_accessible(norm_blog_img):
+                print(f"📸 Foto jam tangan valid dari Blogspot: {norm_blog_img}")
+                return norm_blog_img
+            else:
+                print(f"⚠️ Foto Blogspot ({norm_blog_img}) mengembalikan error HTTP. Fallback mengambil foto dari Shopify...")
+        else:
+            print(f"ℹ️ Postingan Blogspot tidak memuat gambar. Mengambil foto dari Shopify...")
+
+    # 2. Prioritas Kedua: Shopify
+    shopify_img = None
+    if shopify_product:
+        shopify_img = extract_shopify_image_url(shopify_product)
+
+    if not shopify_img and sku:
+        print(f"🔍 Mencari foto jam tangan di Shopify untuk SKU: '{sku}'...")
+        shopify_img = get_shopify_image_by_sku(sku, blogger_post=post)
+
+    if shopify_img and is_image_url_accessible(shopify_img):
+        print(f"📸 Foto jam tangan berhasil diambil dari Shopify: {shopify_img}")
+        return shopify_img
+
+    # 3. Fallback: URL cadangan (misal dari Spreadsheet)
+    if fallback_url:
+        norm_fb = normalize_blogger_image_url(fallback_url)
+        if is_image_url_accessible(norm_fb):
+            print(f"📸 Foto jam tangan diambil dari fallback Spreadsheet: {norm_fb}")
+            return norm_fb
+
+    print(f"⚠️ Tidak dapat menemukan foto jam tangan yang valid dari Blogspot maupun Shopify untuk SKU '{sku}'.")
+    return None
+
+def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post=None, shopify_product=None, fallback_url=None):
+    if not GREEN_API_ID_INSTANCE or not GREEN_API_API_TOKEN or "xxxx" in GREEN_API_ID_INSTANCE:
+        return
+    try:
+        # Tentukan URL foto yang valid
+        final_image_url = None
+        if image_url:
+            norm_url = normalize_blogger_image_url(image_url)
+            if is_image_url_accessible(norm_url):
+                final_image_url = norm_url
+            else:
+                print(f"⚠️ URL gambar ({norm_url}) tidak dapat diakses. Mencari alternatif foto...")
+
+        # Jika belum dapat foto yang valid, cari otomatis via get_watch_photo_url
+        if not final_image_url and (sku or blogger_post or shopify_product or fallback_url):
+            final_image_url = get_watch_photo_url(
+                post=blogger_post,
+                sku=sku,
+                shopify_product=shopify_product,
+                fallback_url=fallback_url
+            )
+
+        sent_image = False
+        if final_image_url:
+            # Batasi caption maksimal 1024 karakter sesuai limit Green API sendFileByUrl
+            caption_wa = pesan_text if len(pesan_text) <= 1024 else pesan_text[:1020] + "..."
+            url_file = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendFileByUrl/{GREEN_API_API_TOKEN}"
+            payload_file = {
+                "chatId": chat_id,
+                "urlFile": final_image_url,
+                "fileName": "watch.jpg",
+                "caption": caption_wa
+            }
+            res = requests.post(url_file, json=payload_file, timeout=20)
+            if res.status_code == 200:
+                print(f"📷 Berhasil mengirim feedback WA beserta foto jam tangan ke {chat_id} (URL: {final_image_url})")
+                sent_image = True
+                # Jika ada teks panjang yang terpotong karena batas caption 1024 karakter, kirim sambungannya
+                if len(pesan_text) > 1024:
+                    sisa_pesan = "..." + pesan_text[1020:]
+                    url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
+                    requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+            else:
+                print(f"⚠️ Green API sendFileByUrl gagal (Status {res.status_code}): {res.text}.")
+                # Coba cadangan foto dari Shopify jika sebelumnya mengirim foto Blogspot
+                shopify_backup = None
+                if sku:
+                    shopify_backup = get_shopify_image_by_sku(sku, blogger_post=blogger_post)
+                if shopify_backup and shopify_backup != final_image_url and is_image_url_accessible(shopify_backup):
+                    print(f"🔄 Mencoba mengirim ulang feedback dengan foto cadangan dari Shopify: {shopify_backup}")
+                    payload_file["urlFile"] = shopify_backup
+                    res_backup = requests.post(url_file, json=payload_file, timeout=20)
+                    if res_backup.status_code == 200:
+                        print(f"📷 Berhasil mengirim feedback WA beserta foto cadangan Shopify ke {chat_id}")
+                        sent_image = True
+                        if len(pesan_text) > 1024:
+                            sisa_pesan = "..." + pesan_text[1020:]
+                            url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
+                            requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+                    else:
+                        print(f"⚠️ Kirim foto cadangan Shopify juga gagal: {res_backup.text}")
+
+        # Fallback ke pesan teks biasa HANYA jika semua percobaan pengiriman gambar gagal
+        if not sent_image:
+            print(f"⚠️ Mengirim feedback dalam format teks biasa...")
+            url = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
+            payload = {"chatId": chat_id, "message": pesan_text}
+            res_txt = requests.post(url, json=payload, timeout=10)
+            if res_txt.status_code == 200:
+                print(f"💬 Berhasil mengirim feedback pesan teks ke {chat_id}")
+            else:
+                print(f"⚠️ Gagal kirim pesan teks ke Green API (Status {res_txt.status_code}): {res_txt.text}")
+    except Exception as e:
+        print(f"⚠️ Gagal kirim balasan WA: {e}")
 
 def extract_takedown_description_from_post(post):
     """
@@ -482,9 +681,13 @@ def extract_sku_from_blogger_post(post):
     if not post:
         return None, None
     content = post.get("content", "")
-    sku_match = re.search(r'Code:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
+    sku_match = re.search(r'Code\s*:\s*(?:<[^>]+>)*\s*([\w\-\/]+)', content, re.IGNORECASE)
+    if not sku_match:
+        sku_match = re.search(r'Code:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
     sku = sku_match.group(1).strip() if sku_match else None
-    owner_match = re.search(r'Code:(?:&nbsp;|\s)*[\w\-\/]+(?:&nbsp;|\s)*\((.*?)\)', content, re.IGNORECASE)
+    owner_match = re.search(r'Code\s*:\s*(?:<[^>]+>)*\s*[\w\-\/]+(?:<[^>]+>)*\s*\((.*?)\)', content, re.IGNORECASE)
+    if not owner_match:
+        owner_match = re.search(r'Code:(?:&nbsp;|\s)*[\w\-\/]+(?:&nbsp;|\s)*\((.*?)\)', content, re.IGNORECASE)
     owner = owner_match.group(1).strip() if owner_match else None
     return sku, owner
 
@@ -749,9 +952,8 @@ def update_blogger_repost(service, post):
         formatted_prev_date = format_published_date(original_published_str)
 
         # 1. Update Labels: Hapus NEW ARRIVAL dan REPRICE, Tambahkan REPOST
-        new_labels = [l for l in current_labels if l.strip().upper() not in ["NEW ARRIVAL", "REPRICE"]]
-        if not any(l.strip().upper() == "REPOST" for l in new_labels):
-            new_labels.append("REPOST")
+        new_labels = [l for l in current_labels if l.strip().upper() not in ["NEW ARRIVAL", "REPRICE", "REPOST"]]
+        new_labels.append("REPOST")
 
         is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in current_labels)
         is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in current_labels)
@@ -883,6 +1085,16 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
             id
             title
             status
+            featuredImage {
+              url
+            }
+            images(first: 2) {
+              edges {
+                node {
+                  url
+                }
+              }
+            }
             variants(first: 10) {
               edges {
                 node {
@@ -1040,7 +1252,9 @@ def update_shopify_reprice(sku, command_type, numeric_price, blogger_post=None):
                 "matched_sku": actual_sku,
                 "method": matched_method,
                 "new_price": updated_price,
-                "compare_at_price": updated_compare
+                "compare_at_price": updated_compare,
+                "photo_url": extract_shopify_image_url(matched_product),
+                "product_node": matched_product
             }
         else:
             print(f"⚠️ Gagal update harga Shopify (HTTP {put_res.status_code}): {put_res.text}")
@@ -1139,7 +1353,9 @@ def update_shopify_takedown(sku, blogger_post=None):
             "matched_sku": actual_sku,
             "status_draft": status_updated,
             "stock_zero": stock_zeroed,
-            "method": matched_method
+            "method": matched_method,
+            "photo_url": extract_shopify_image_url(matched_product),
+            "product_node": matched_product
         }
     else:
         return {"status": "error", "message": f"Gagal mengubah status dan stok produk '{product_title}'."}
@@ -1206,11 +1422,23 @@ def update_consignment_repost_sheet(sku, sheet_name="PHOTO STUDIO"):
 def update_consignment_status_sheet(sku, status_text, sheet_name="PHOTO STUDIO"):
     """
     Mengirim perintah update status (Sold, On Hold, Takedown) ke Google Apps Script
-    Spreadsheet Consignment Listing (Tab PHOTO STUDIO).
+    Spreadsheet Consignment Listing (Tab PHOTO STUDIO / PHOTO OWNER).
     Kriteria:
     - Kolom A (Status) diubah menjadi status_text ('Sold', 'On Hold', 'Takedown').
     - Kolom Tracking Post (L, M, N, O): Kolom yang belum dicentang dihapus centangnya.
     """
+    # Normalisasi nilai status_text agar persis sesuai Data Validation Google Sheets
+    clean_status = (status_text or "").strip()
+    norm_key = clean_status.lower().replace(" ", "").replace("_", "")
+    if norm_key in ["takedown", "take"]:
+        clean_status = "Takedown"
+    elif norm_key in ["sold"]:
+        clean_status = "Sold"
+    elif norm_key in ["onhold", "hold"]:
+        clean_status = "On Hold"
+    elif norm_key in ["reprice"]:
+        clean_status = "Reprice"
+
     now_wib = datetime.now(WIB)
     date_str = now_wib.strftime("%d/%m/%y")
 
@@ -1218,7 +1446,7 @@ def update_consignment_status_sheet(sku, status_text, sheet_name="PHOTO STUDIO")
         "action": "update_consignment_status",
         "sheet_name": sheet_name,
         "sku": sku,
-        "status_text": status_text,
+        "status_text": clean_status,
         "date_str": date_str
     }
 
@@ -1497,13 +1725,15 @@ def wa_webhook():
                         f"ℹ️ *Shopify:* Sudah berstatus DRAFT / Non-aktif\n"
                     )
 
-                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=sheet_photo_url)
+                    resolved_photo = get_watch_photo_url(post=None, sku=sku, fallback_url=sheet_photo_url)
+                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=resolved_photo, sku=sku, fallback_url=sheet_photo_url)
 
                     return jsonify({
                         "status": "success",
                         "command": cmd_type,
                         "status_text": status_text,
                         "sku": sku,
+                        "photo_url": resolved_photo,
                         "target_sheet": target_sheet,
                         "trigger": "blogspot_post_not_found_spreadsheet_only",
                         "spreadsheet_consignment": sheet_res
@@ -1518,7 +1748,8 @@ def wa_webhook():
                         f"❌ *Blogspot:* Postingan tidak ditemukan\n"
                         f"❌ *Spreadsheet (Consignment):* {err_msg}\n"
                     )
-                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
+                    resolved_photo = get_watch_photo_url(post=None, sku=sku)
+                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=resolved_photo, sku=sku)
                     return jsonify({
                         "status": "not_found",
                         "command": cmd_type,
@@ -1601,7 +1832,21 @@ def wa_webhook():
             if post_description:
                 pesan_konfirmasi += f"\n━━━━━━━━━━━━━━━━━━\n{post_description}\n"
 
-            kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=photo_url)
+            # Resolusi foto jam tangan: Prioritas Blogspot -> Fallback Shopify
+            photo_url = get_watch_photo_url(
+                post=post,
+                sku=sku,
+                shopify_product=shopify_res.get("product_node")
+            )
+
+            kirim_balasan_wa(
+                chat_id,
+                pesan_konfirmasi.strip(),
+                image_url=photo_url,
+                sku=sku,
+                blogger_post=post,
+                shopify_product=shopify_res.get("product_node")
+            )
 
             return jsonify({
                 "status": "success",
@@ -1677,7 +1922,7 @@ def wa_webhook():
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
-                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_ps_res.get('row', '-')} ({sheet_consign_ps_res.get('tracking_checked', '')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *Repost* (Baris {sheet_consign_ps_res.get('row', '-')}, {sheet_consign_ps_res.get('tracking_checked', '')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
@@ -1685,7 +1930,7 @@ def wa_webhook():
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
-                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_po_res.get('row', '-')} ({sheet_consign_po_res.get('tracking_checked', '')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *Repost* (Baris {sheet_consign_po_res.get('row', '-')}, {sheet_consign_po_res.get('tracking_checked', '')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
