@@ -70,14 +70,83 @@ OWNER_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw-PV4bR4PhgJyj
 
 # Daftar Merek IDWX (gabungan dari semua script)
 DAFTAR_MEREK_IDWX = {
-    "ROLEX": "Rolex", "PATEK PHILIPPE": "Patek Philippe", "AUDEMARS PIGUET X SWATCH": "Swatch X Audemars Piguet" ,"AUDEMARS PIGUET": "Audemars Piguet","JAEGER LECOULTRE": "Jaeger-LeCoultre","JAEGER": "Jaeger-LeCoultre", "FRANCK MULLER": "Franck Muller", "BELL & ROSS": "Bell & Ross",
+    "ROLEX": "Rolex", "PATEK PHILIPPE": "Patek Philippe",
+    "AUDEMARS PIGUET X SWATCH": "Swatch X Audemars Piguet", "SWATCH X AUDEMARS PIGUET": "Swatch X Audemars Piguet",
+    "AUDEMARS PIGUET": "Audemars Piguet",
+    "JAEGER LECOULTRE": "Jaeger-LeCoultre", "JAEGER-LECOULTRE": "Jaeger-LeCoultre", "JAEGER": "Jaeger-LeCoultre", "JLC": "Jaeger-LeCoultre",
+    "FRANCK MULLER": "Franck Muller", "BELL & ROSS": "Bell & Ross",
     "OMEGA": "Omega", "TUDOR": "Tudor", "SEIKO": "Seiko", "GRAND SEIKO": "Grand Seiko", "BAUME": "Baume & Mercier", "BAUME & MERCIER": "Baume & Mercier", "ROGER DUBUIS": "Roger Dubuis",
     "CARTIER": "Cartier", "PANERAI": "Panerai", "IWC": "IWC", "BREITLING": "Breitling", "OTSUKA LOTEC": "Otsuka Lotec",
-    "TAG HEUER": "Tag Heuer", "JAEGER-LECOULTRE": "Jaeger-LeCoultre", "JLC": "Jaeger-LeCoultre",
+    "TAG HEUER": "Tag Heuer",
     "HUBLOT": "Hublot", "RICHARD MILLE": "Richard Mille", "VACHERON CONSTANTIN": "Vacheron Constantin",
     "BLANCPAIN": "Blancpain", "CHOPARD": "Chopard", "ZENITH": "Zenith", "LONGINES": "Longines",
     "TISSOT": "Tissot", "F.P. JOURNE": "F.P. Journe", "BVLGARI": "Bvlgari", "A. LANGE": "A. Lange & Söhne"
 }
+
+def detect_vendor_and_brand(clean_title):
+    """
+    Mendeteksi nama vendor dan kata kunci merek yang cocok dari clean_title.
+    Mengembalikan tuple: (vendor, matched_keyword).
+    """
+    vendor = "Unknown"
+    matched_keyword = ""
+    for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
+        # Pola fleksibel untuk tanda hubung (-) vs spasi ( )
+        kw_pattern = re.escape(keyword).replace(r"\ ", r"[- ]").replace(r"\-", r"[- ]")
+        if re.search(rf"\b{kw_pattern}\b", clean_title, re.IGNORECASE):
+            vendor = DAFTAR_MEREK_IDWX[keyword]
+            matched_keyword = keyword
+            break
+
+    if vendor == "Unknown":
+        vendor = clean_title.split()[0].title() if clean_title.split() else "Unknown"
+        matched_keyword = vendor
+
+    return vendor, matched_keyword
+
+def strip_brand_from_title(title, vendor="Unknown", matched_keyword=""):
+    """
+    Menghapus nama merek / brand dari awal judul secara aman dan menyeluruh:
+    - Menghapus matched_keyword (kata kunci asli di judul Blogspot, misal: 'AUDEMARS PIGUET X SWATCH')
+    - Menghapus vendor (misal: 'Swatch X Audemars Piguet')
+    - Menghapus semua keyword yang mengarah ke vendor yang sama
+    - Menangani variasi tanda hubung vs spasi (misal: 'JAEGER-LECOULTRE' vs 'JAEGER LECOULTRE')
+    """
+    if not title:
+        return ""
+
+    clean = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', title, flags=re.IGNORECASE).strip()
+    candidates = set()
+
+    if matched_keyword:
+        candidates.add(matched_keyword.strip())
+    if vendor and vendor != "Unknown":
+        candidates.add(vendor.strip())
+        for kw, v in DAFTAR_MEREK_IDWX.items():
+            if v.lower() == vendor.lower():
+                candidates.add(kw.strip())
+    else:
+        for kw in DAFTAR_MEREK_IDWX.keys():
+            candidates.add(kw.strip())
+
+    # Tangani variasi tanda hubung '-' vs spasi ' ' (contoh: JAEGER LECOULTRE vs JAEGER-LECOULTRE)
+    extra = set()
+    for c in candidates:
+        if "-" in c:
+            extra.add(c.replace("-", " "))
+        if " " in c:
+            extra.add(c.replace(" ", "-"))
+    candidates.update(extra)
+
+    # Urutkan berdasarkan panjang teks terpanjang terlebih dahulu
+    for cand in sorted(candidates, key=len, reverse=True):
+        pattern = rf"^{re.escape(cand)}\s*[-–—:]*\s*"
+        clean_new = re.sub(pattern, "", clean, flags=re.IGNORECASE).strip()
+        if clean_new != clean:
+            clean = clean_new
+            break
+
+    return clean
 
 # ==========================================
 # 2. AUTENTIKASI OAUTH GOOGLE (BLOGGER, DRIVE, YOUTUBE)
@@ -552,21 +621,10 @@ def process_notsync(blogger_service, urls):
                 final_description_html = f"<p>{desc_lines[0] if desc_lines else ''}</p>"
 
             # --- DETEKSI MEREK, PAGE TITLE, URL HANDLE & DISPLAY TITLE ---
-            vendor = "Unknown"
-            matched_keyword = ""
-            for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
-                if keyword in clean_title.upper():
-                    vendor = DAFTAR_MEREK_IDWX[keyword]
-                    matched_keyword = keyword
-                    break
-
-            if vendor == "Unknown":
-                vendor = clean_title.split()[0].title()
-                matched_keyword = vendor
+            vendor, matched_keyword = detect_vendor_and_brand(clean_title)
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
-            display_title = re.sub(rf"(?i)^({re.escape(matched_keyword)}|{re.escape(vendor)})\s*", "", clean_title).strip()
-
+            display_title = strip_brand_from_title(clean_title, vendor=vendor, matched_keyword=matched_keyword)
 
             custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
@@ -715,21 +773,10 @@ def process_twp(blogger_service, urls):
                 final_description_html = f"<p>{desc_lines[0] if desc_lines else ''}</p>"
 
             # --- DETEKSI MEREK, PAGE TITLE, URL HANDLE & DISPLAY TITLE ---
-            vendor = "Unknown"
-            matched_keyword = ""
-            for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
-                if keyword in clean_title.upper():
-                    vendor = DAFTAR_MEREK_IDWX[keyword]
-                    matched_keyword = keyword
-                    break
-
-            if vendor == "Unknown":
-                vendor = clean_title.split()[0].title()
-                matched_keyword = vendor
+            vendor, matched_keyword = detect_vendor_and_brand(clean_title)
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
-            display_title = re.sub(rf"(?i)^({re.escape(matched_keyword)}|{re.escape(vendor)})\s*", "", clean_title).strip()
-
+            display_title = strip_brand_from_title(clean_title, vendor=vendor, matched_keyword=matched_keyword)
 
             custom_handle = buat_handle_url(clean_title, year, EXISTING_HANDLES)
 
@@ -829,13 +876,10 @@ def process_photo_studio(blogger_service, urls):
             clean_title = re.sub(r'\(\d{4}\)', '', clean_title).strip()
             if not clean_title: continue
 
-            vendor = "Unknown"
-            for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
-                if keyword in clean_title.upper(): vendor = DAFTAR_MEREK_IDWX[keyword]; break
-            if vendor == "Unknown": vendor = clean_title.split()[0].title()
+            vendor, matched_keyword = detect_vendor_and_brand(clean_title)
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
-            display_title_no_year = re.sub(rf"^{re.escape(vendor)}\s+", "", clean_title, flags=re.IGNORECASE).strip()
+            display_title_no_year = strip_brand_from_title(clean_title, vendor=vendor, matched_keyword=matched_keyword)
             short_display_title = f"{display_title_no_year} ({year})" if year else display_title_no_year
 
             soup = BeautifulSoup(raw_html, 'html.parser')
@@ -1019,7 +1063,7 @@ def process_photo_studio(blogger_service, urls):
                 try:
                     gdrive_folder_id = extract_gdrive_folder_id(raw_html)
                     if gdrive_folder_id:
-                        yt_title = format_youtube_title(raw_title, vendor)
+                        yt_title = format_youtube_title(raw_title, vendor=vendor, matched_keyword=matched_keyword)
                         print(f"   🎬 Link GDrive Assets terdeteksi ({gdrive_folder_id}). Menambahkan ke antrean YouTube...")
                         add_to_youtube_queue({
                             "shopify_product_id": new_id,
@@ -1094,16 +1138,11 @@ def process_photo_owner(blogger_service, urls):
                 if year_match_title:
                     year = year_match_title.group(1)
 
-            vendor = "Unknown"
-            for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
-                if keyword in clean_title.upper():
-                    vendor = DAFTAR_MEREK_IDWX[keyword]
-                    break
-            if vendor == "Unknown": vendor = clean_title.split()[0].title()
+            vendor, matched_keyword = detect_vendor_and_brand(clean_title)
 
             seo_page_title = f"{clean_title} ({year})" if year else clean_title
-            short_display_title = re.sub(rf"^{vendor}\s+", "", clean_title, flags=re.IGNORECASE).strip()
-            if year: short_display_title = f"{short_display_title} ({year})"
+            display_title_no_year = strip_brand_from_title(clean_title, vendor=vendor, matched_keyword=matched_keyword)
+            short_display_title = f"{display_title_no_year} ({year})" if year else display_title_no_year
 
             raw_image_urls = extract_high_res_images(soup)
 
@@ -1388,22 +1427,14 @@ def classify_and_process_url(blogger_service, url):
 # 9. OTOMASI YOUTUBE SHORTS & GOOGLE DRIVE QUEUE
 # ==========================================
 
-def format_youtube_title(raw_title, vendor="Unknown"):
+def format_youtube_title(raw_title, vendor="Unknown", matched_keyword=""):
     """
     Format judul YouTube:
     1. Hapus awalan [FOR SALE]
-    2. Hapus nama brand/vendor di awal judul
+    2. Hapus nama brand/vendor di awal judul (menggunakan strip_brand_from_title yang fleksibel)
     3. Batasi panjang total maks 100 karakter (tanpa tagar #shorts)
     """
-    clean = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', raw_title, flags=re.IGNORECASE).strip()
-
-    if vendor and vendor != "Unknown":
-        clean = re.sub(rf"^{re.escape(vendor)}\s+", "", clean, flags=re.IGNORECASE).strip()
-    else:
-        for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
-            if clean.upper().startswith(keyword):
-                clean = clean[len(keyword):].strip()
-                break
+    clean = strip_brand_from_title(raw_title, vendor=vendor, matched_keyword=matched_keyword)
 
     if len(clean) > 100:
         clean = clean[:97].strip() + "..."
