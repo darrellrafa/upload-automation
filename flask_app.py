@@ -284,6 +284,55 @@ def parse_repost_chat(message_text):
         "code": code
     }
 
+def parse_download_foto_chat(message_text):
+    """
+    Memvalidasi dan mengekstrak perintah chat DOWNLOAD FOTO:
+    Format trigger yang didukung:
+    1. FOTO [SKU] (contoh: 'foto 2034349', 'FOTO CPO-240626-02')
+    2. FOTO / [SKU] atau FOTO: [SKU]
+    3. DOWNLOAD FOTO [SKU]
+    Mendukung SKU dengan karakter garis miring (misal 5720232/4642909) atau strip.
+    Bebas huruf besar/kecil (case-insensitive).
+    """
+    if not message_text:
+        return None
+
+    clean_text = message_text.strip()
+    m = re.match(r'^(?:download\s+)?foto\b\s*[:/]?\s*(.*)$', clean_text, re.IGNORECASE)
+    if not m:
+        return None
+
+    rest = m.group(1).strip()
+    if not rest:
+        return {
+            "command_type": "DOWNLOAD_FOTO_EMPTY",
+            "code": ""
+        }
+
+    if rest.startswith('/'):
+        rest = rest.lstrip('/ \t')
+
+    if not rest:
+        return {
+            "command_type": "DOWNLOAD_FOTO_EMPTY",
+            "code": ""
+        }
+
+    spaced_parts = [p.strip() for p in re.split(r'\s+/\s+', rest) if p.strip()]
+    if len(spaced_parts) > 1:
+        code = "/".join(spaced_parts).strip()
+    else:
+        code = rest.strip()
+
+    code = clean_sku_string(code).upper()
+    if not code:
+        return None
+
+    return {
+        "command_type": "DOWNLOAD_FOTO",
+        "code": code
+    }
+
 def format_tanggal_indonesia():
     hari = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
     bulan = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", 
@@ -447,6 +496,47 @@ def extract_first_image_from_post(post):
 
     return None
 
+def extract_all_images_from_post(post):
+    """
+    Mengekstrak seluruh URL gambar beresolusi tinggi dari postingan Blogspot
+    berdasarkan urutan tampilan di artikel HTML, dinormalisasi ke ukuran original/high-res (/s1600/ atau =s0).
+    """
+    if not post:
+        return []
+
+    image_urls = []
+    content = post.get("content", "")
+
+    if content:
+        try:
+            soup = BeautifulSoup(content, 'html.parser')
+            for img in soup.find_all('img'):
+                if 'src' in img.attrs:
+                    raw_url = img['src'].strip()
+                    parent_a = img.find_parent('a')
+                    if parent_a and 'href' in parent_a.attrs:
+                        href = parent_a['href'].strip()
+                        if re.search(r'\.(jpg|jpeg|png|webp)($|\?)', href, re.IGNORECASE) or 'googleusercontent.com' in href or 'bp.blogspot.com' in href:
+                            raw_url = href
+
+                    norm_url = normalize_blogger_image_url(raw_url)
+                    if norm_url and norm_url not in image_urls:
+                        image_urls.append(norm_url)
+        except Exception as e:
+            print(f"⚠️ Error parsing HTML untuk semua gambar: {e}")
+
+    # Fallback jika dari HTML tidak ditemukan atau untuk melengkapi: cek field images Blogger API
+    api_images = post.get("images", [])
+    if isinstance(api_images, list):
+        for img_obj in api_images:
+            url = img_obj.get("url") if isinstance(img_obj, dict) else img_obj
+            if url:
+                norm_url = normalize_blogger_image_url(str(url).strip())
+                if norm_url and norm_url not in image_urls:
+                    image_urls.append(norm_url)
+
+    return image_urls
+
 def extract_shopify_image_url(product_node):
     """
     Mengekstrak URL gambar utama dari node produk Shopify.
@@ -600,6 +690,59 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post
                 print(f"⚠️ Gagal kirim pesan teks ke Green API (Status {res_txt.status_code}): {res_txt.text}")
     except Exception as e:
         print(f"⚠️ Gagal kirim balasan WA: {e}")
+
+def kirim_semua_foto_wa(chat_id, image_urls, sku, post_title=""):
+    """
+    Mengirim seluruh foto produk ke chat WhatsApp via Green API sendFileByUrl.
+    """
+    if not GREEN_API_ID_INSTANCE or not GREEN_API_API_TOKEN or "xxxx" in GREEN_API_ID_INSTANCE:
+        return 0
+
+    if not image_urls:
+        return 0
+
+    url_file = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendFileByUrl/{GREEN_API_API_TOKEN}"
+    success_count = 0
+    total = len(image_urls)
+    clean_sku = clean_sku_string(sku)
+
+    # 1. Kirim pesan pengantar terlebih dahulu
+    pesan_header = (
+        f"📸 *FOTO PRODUK BLOGSPOT*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔢 *Kode / SKU:* {clean_sku}\n"
+        f"⌚ *Judul:* {post_title or '-'}\n"
+        f"🖼️ *Jumlah Foto:* {total} lembar\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"_Mengirim {total} foto ke WhatsApp..._"
+    )
+    url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
+    try:
+        requests.post(url_txt, json={"chatId": chat_id, "message": pesan_header}, timeout=10)
+    except Exception as e:
+        print(f"⚠️ Gagal kirim pesan pengantar foto: {e}")
+
+    # 2. Kirim setiap foto ke WhatsApp
+    for idx, img_url in enumerate(image_urls, 1):
+        try:
+            caption_img = f"📸 *{clean_sku}* ({idx}/{total})\n{post_title}" if idx == 1 else f"📸 *{clean_sku}* ({idx}/{total})"
+            payload_file = {
+                "chatId": chat_id,
+                "urlFile": img_url,
+                "fileName": f"{clean_sku}_{idx}.jpg",
+                "caption": caption_img[:1024]
+            }
+            res = requests.post(url_file, json=payload_file, timeout=25)
+            if res.status_code == 200:
+                success_count += 1
+                print(f"   📷 WA Foto [{idx}/{total}] terkirim ke {chat_id}")
+            else:
+                print(f"   ⚠️ WA Foto [{idx}/{total}] gagal (Status {res.status_code}): {res.text}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"   ⚠️ Error kirim foto [{idx}/{total}] ke WA: {e}")
+
+    return success_count
 
 def extract_takedown_description_from_post(post):
     """
@@ -1010,6 +1153,99 @@ def update_blogger_repost(service, post):
     except Exception as e:
         print(f"⚠️ Error update Blogger repost: {e}")
         return {"status": "error", "message": str(e), "is_consign_ps": False, "is_consign_po": False}
+
+def download_all_images_from_blogspot(sku, output_dir=None, post=None):
+    """
+    Mendownload semua gambar produk dari postingan Blogspot berdasarkan SKU/Kode produk.
+    Menyimpan file ke output_dir (default: 'downloaded_images/<clean_sku>').
+    Mengembalikan dict berisi status, daftar path file lokal, dan daftar URL gambar.
+    """
+    if not sku:
+        return {"status": "error", "message": "SKU tidak boleh kosong", "sku": "", "image_urls": [], "downloaded_files": []}
+
+    service = get_blogger_service()
+    if not post and service:
+        post = find_blogger_post_by_code(service, sku)
+
+    if not post:
+        return {
+            "status": "not_found",
+            "sku": sku,
+            "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot.",
+            "image_urls": [],
+            "downloaded_files": []
+        }
+
+    image_urls = extract_all_images_from_post(post)
+    post_title = post.get("title", "")
+    publish_date = format_published_date(post.get("published", ""))
+
+    if not image_urls:
+        return {
+            "status": "no_images",
+            "sku": sku,
+            "post_title": post_title,
+            "publish_date": publish_date,
+            "message": f"Tidak ditemukan gambar pada postingan '{post_title}'.",
+            "image_urls": [],
+            "downloaded_files": []
+        }
+
+    clean_sku = re.sub(r'[^\w\-]', '_', clean_sku_string(sku))
+    if not output_dir:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        output_dir = os.path.join(base_dir, "downloaded_images", clean_sku)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    downloaded_files = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+    }
+
+    print(f"📥 Memulai download {len(image_urls)} gambar untuk SKU '{sku}' ke folder: {output_dir}")
+
+    for idx, url in enumerate(image_urls, 1):
+        filename = f"{clean_sku}_{idx}.jpg"
+        filepath = os.path.join(output_dir, filename)
+
+        # Kandidat resolusi URL untuk keandalan download
+        candidates = [url]
+        if '/s1600/' in url:
+            candidates.append(url.replace('/s1600/', '/s0/'))
+        elif '/s0/' in url:
+            candidates.append(url.replace('/s0/', '/s1600/'))
+
+        download_success = False
+        for cand_url in candidates:
+            try:
+                res = requests.get(cand_url, headers=headers, timeout=30)
+                if res.status_code == 200 and len(res.content) > 0:
+                    with open(filepath, 'wb') as f:
+                        f.write(res.content)
+                    downloaded_files.append(filepath)
+                    download_success = True
+                    print(f"   ✅ [{idx}/{len(image_urls)}] Tersimpan: {filename} ({len(res.content)} bytes)")
+                    break
+            except Exception as e:
+                print(f"   ⚠️ Gagal download {cand_url}: {e}")
+
+        if not download_success:
+            print(f"   ❌ Gagal mendownload gambar {idx} dari semua kandidat URL.")
+
+    return {
+        "status": "success",
+        "sku": sku,
+        "post_title": post_title,
+        "publish_date": publish_date,
+        "total_images": len(image_urls),
+        "total_downloaded": len(downloaded_files),
+        "image_urls": image_urls,
+        "downloaded_files": downloaded_files,
+        "output_dir": output_dir,
+        "post": post
+    }
 
 # ==============================================================================
 # 4. SHOPIFY GRAPHQL REPRICE LOGIC
@@ -1950,6 +2186,66 @@ def wa_webhook():
             }), 200
 
         # ======================================================================
+        # JALUR BARU: PERINTAH DOWNLOAD FOTO BLOGSPOT (TRIGGER: FOTO + SKU)
+        # ======================================================================
+        foto_cmd = parse_download_foto_chat(caption) if not image_url else None
+        if foto_cmd:
+            if foto_cmd.get("command_type") == "DOWNLOAD_FOTO_EMPTY":
+                pesan_bantuan = (
+                    "ℹ️ *FORMAT DOWNLOAD FOTO:*\n"
+                    "Ketik *FOTO [SKU]* untuk mendownload dan menerima seluruh foto produk dari Blogspot.\n\n"
+                    "Contoh:\n"
+                    "• *FOTO 2034349*\n"
+                    "• *FOTO CPO-240626-02*"
+                )
+                kirim_balasan_wa(chat_id, pesan_bantuan)
+                return jsonify({"status": "ignored", "reason": "Missing SKU in FOTO command"}), 200
+
+            sku = foto_cmd["code"]
+            print(f"📸 Menerima Perintah FOTO untuk SKU: '{sku}' dari: {sender_name}")
+
+            # Eksekusi fungsi download semua image produk dari Blogspot
+            result = download_all_images_from_blogspot(sku)
+
+            if result.get("status") == "not_found":
+                pesan_err = (
+                    f"⚠️ *FOTO PRODUK TIDAK DITEMUKAN*\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🔢 *Kode / SKU:* {sku}\n"
+                    f"👤 *Diminta oleh:* {sender_name}\n\n"
+                    f"❌ Postingan dengan kode *{sku}* tidak ditemukan di Blogspot."
+                )
+                kirim_balasan_wa(chat_id, pesan_err.strip())
+                return jsonify(result), 200
+
+            elif result.get("status") == "no_images":
+                pesan_err = (
+                    f"⚠️ *FOTO PRODUK KOSONG*\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🔢 *Kode / SKU:* {sku}\n"
+                    f"⌚ *Judul:* {result.get('post_title', '-')}\n"
+                    f"👤 *Diminta oleh:* {sender_name}\n\n"
+                    f"❌ Tidak ditemukan foto pada postingan ini di Blogspot."
+                )
+                kirim_balasan_wa(chat_id, pesan_err.strip())
+                return jsonify(result), 200
+
+            # Kirim semua foto ke WhatsApp
+            image_urls = result.get("image_urls", [])
+            post_title = result.get("post_title", "")
+            kirim_semua_foto_wa(chat_id, image_urls, sku, post_title=post_title)
+
+            return jsonify({
+                "status": "success",
+                "command": "DOWNLOAD_FOTO",
+                "sku": sku,
+                "post_title": post_title,
+                "total_images": len(image_urls),
+                "total_downloaded": result.get("total_downloaded", 0),
+                "output_dir": result.get("output_dir", "")
+            }), 200
+
+        # ======================================================================
         # JALUR D: INPUT DRAFT JAM BARU (FOTO STUDIO WA)
         # ======================================================================
         # Validasi ketat: Wajib melampirkan foto & format caption jam tangan valid
@@ -1982,5 +2278,26 @@ def wa_webhook():
         print(f"❌ Error Webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/api/download_photos", methods=["GET", "POST"])
+def api_download_photos():
+    """
+    Endpoint API manual untuk mendownload semua foto produk dari Blogspot berdasarkan SKU.
+    Contoh: /api/download_photos?sku=2034349
+    """
+    sku = request.args.get("sku") or (request.get_json(silent=True) or {}).get("sku")
+    if not sku:
+        return jsonify({"status": "error", "message": "Parameter 'sku' wajib disertakan"}), 400
+    res = download_all_images_from_blogspot(sku)
+    return jsonify(res), (200 if res.get("status") == "success" else 404)
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("foto", "download", "--download"):
+        if len(sys.argv) > 2:
+            target_sku = sys.argv[2]
+            res = download_all_images_from_blogspot(target_sku)
+            print("Hasil:", res)
+        else:
+            print("Penggunaan CLI: python3 flask_app.py foto <SKU>")
+    else:
+        app.run(host="0.0.0.0", port=5000, debug=True)
