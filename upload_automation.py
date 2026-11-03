@@ -843,6 +843,41 @@ def process_twp(blogger_service, urls):
     return success_urls
 
 
+def update_history_foto_studio_status(sku, status="Publish"):
+    """
+    Mengirim perintah update status ke Google Apps Script Spreadsheet 'History Foto Studio'.
+    Status yang digunakan:
+    - 'On Draft' : Dicatat pertama kali via bot WA
+    - 'Video'    : Setelah produk berhasil diunggah ke Shopify tetapi video YouTube masih dalam antrean/belum diupload
+    - 'Publish'  : Setelah video YouTube berhasil diunggah dan disematkan ke produk Shopify
+    """
+    if not sku:
+        return None
+    try:
+        payload = {
+            "sheet_name": "PHOTO STUDIO",
+            "sku": sku,
+            "status": status
+        }
+        res = requests.post(APPS_SCRIPT_HISTORY_PHOTO_STUDIO, json=payload, timeout=30)
+        if res.status_code == 200:
+            try:
+                res_data = res.json()
+                if res_data.get("status") == "success":
+                    print(f"   ✅ Apps Script (History Foto Studio): Status SKU '{sku}' berhasil diubah menjadi '{status}' (Baris {res_data.get('row', '-')})")
+                else:
+                    print(f"   ⚠️ Apps Script (History Foto Studio) Info: {res_data.get('message')}")
+                return res_data
+            except Exception:
+                print(f"   ✅ Apps Script (History Foto Studio) terkirim! (Status: {status})")
+                return {"status": "success"}
+        else:
+            print(f"   ⚠️ Gagal menghubungi Apps Script History Foto Studio. Status: {res.status_code}")
+    except Exception as e:
+        print(f"   ⚠️ Error Webhook History Foto Studio ({sku} -> {status}): {e}")
+    return None
+
+
 # ==========================================
 # 6. FUNGSI PROSES UNTUK PHOTO STUDIO
 # ==========================================
@@ -1036,28 +1071,11 @@ def process_photo_studio(blogger_service, urls):
                     except Exception as e:
                         print(f"   ⚠️ Error Webhook LAMA Sheets: {e}")
 
-                # 3. Kirim ke Webhook BARU (Spreadsheet History Foto Studio) - Update Status ke 'Publish'
-                print(f"   📋 Mengubah Status di Spreadsheet History Foto Studio untuk Serial Number '{sku_pencarian}'...")
-                try:
-                    payload_history_studio = {
-                        "sheet_name": "PHOTO STUDIO",
-                        "sku": sku_pencarian,
-                        "status": "Publish"
-                    }
-                    res_studio = requests.post(APPS_SCRIPT_HISTORY_PHOTO_STUDIO, json=payload_history_studio, timeout=30)
-                    if res_studio.status_code == 200:
-                        try:
-                            res_studio_data = res_studio.json()
-                            if res_studio_data.get("status") == "success":
-                                print(f"   ✅ Apps Script (History Foto Studio): {res_studio_data.get('message')}")
-                            else:
-                                print(f"   ⚠️ Apps Script (History Foto Studio) Info: {res_studio_data.get('message')}")
-                        except Exception:
-                            print(f"   ✅ Apps Script (History Foto Studio) terkirim! (Balasan: {res_studio.text.strip()[:60]})")
-                    else:
-                        print(f"   ⚠️ Gagal menghubungi Apps Script History Foto Studio. Status: {res_studio.status_code}")
-                except Exception as e:
-                    print(f"   ⚠️ Error Webhook History Foto Studio: {e}")
+                # 3. Kirim ke Webhook BARU (Spreadsheet History Foto Studio) - Update Status ke 'Video'
+                # Catatan: Status diatur ke 'Video' karena produk baru selesai di Shopify tetapi video YouTube belum terupload.
+                # Nanti saat video YouTube berhasil diunggah, status otomatis diperbarui menjadi 'Publish'.
+                print(f"   📋 Mengubah Status di Spreadsheet History Foto Studio untuk Serial Number '{sku_pencarian}' menjadi 'Video'...")
+                update_history_foto_studio_status(sku_pencarian, status="Video")
 
                 # 4. Cek Link Google Drive Assets & Masukkan ke Antrean YouTube Video
                 try:
@@ -1068,6 +1086,7 @@ def process_photo_studio(blogger_service, urls):
                         add_to_youtube_queue({
                             "shopify_product_id": new_id,
                             "shopify_handle": custom_handle,
+                            "sku": sku_pencarian,
                             "blogger_title": raw_title,
                             "yt_title": yt_title,
                             "vendor": vendor,
@@ -1701,6 +1720,29 @@ def add_to_youtube_queue(item_data):
     save_youtube_queue(queue)
     print(f"   📥 Ditambahkan ke antrean YouTube: '{item_data.get('yt_title')}' (Status: Menunggu video di Drive)")
 
+def get_sku_for_queue_item(item):
+    """
+    Fallback untuk mendapatkan SKU/Serial Number dari produk Shopify
+    jika data antrean lama belum memiliki field 'sku'.
+    """
+    prod_id = item.get("shopify_product_id")
+    if not prod_id:
+        return None
+    try:
+        ensure_shopify_token()
+        get_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/products/{prod_id}.json"
+        res_get = requests.get(get_url, headers=HEADERS_SHOPIFY, timeout=30)
+        if res_get.status_code == 200:
+            prod = res_get.json().get("product", {})
+            variants = prod.get("variants", [])
+            if variants and variants[0].get("sku"):
+                raw_sku = variants[0].get("sku")
+                base_sku = raw_sku.split("-")[0] if "-" in raw_sku else raw_sku
+                return base_sku or raw_sku
+    except Exception as e:
+        print(f"   ⚠️ Gagal mengambil SKU produk Shopify ID {prod_id}: {e}")
+    return None
+
 def process_pending_youtube_queue():
     queue = load_youtube_queue()
     pending_items = [item for item in queue if item.get('status') == 'pending']
@@ -1772,6 +1814,17 @@ def process_pending_youtube_queue():
 
             print(f"      🔗 Memasang embed video ke Shopify Product ID {prod_id}...")
             inject_youtube_embed_to_shopify(prod_id, video_id)
+
+            # Update status di Spreadsheet History Foto Studio dari 'Video' menjadi 'Publish'
+            item_sku = item.get("sku")
+            if not item_sku:
+                item_sku = get_sku_for_queue_item(item)
+
+            if item_sku:
+                print(f"      📋 Video terunggah! Mengubah Status di History Foto Studio untuk SKU '{item_sku}' menjadi 'Publish'...")
+                update_history_foto_studio_status(item_sku, status="Publish")
+            else:
+                print(f"      ℹ️ SKU tidak ditemukan di antrean, update status History Foto Studio dilewati.")
 
             item['status'] = 'completed'
             item['youtube_video_id'] = video_id
