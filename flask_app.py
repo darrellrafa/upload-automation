@@ -1394,6 +1394,7 @@ def update_consignment_sheet(sku, command_type, formatted_price="", numeric_pric
         "sheet_name": sheet_name,
         "sku": sku,
         "command_type": command_type,
+        "status_text": "Reprice/post",
         "formatted_price": formatted_price,
         "numeric_price": numeric_price,
         "date_str": date_str,
@@ -1421,23 +1422,23 @@ def update_consignment_repost_sheet(sku, sheet_name="PHOTO STUDIO"):
 
 def update_consignment_status_sheet(sku, status_text, sheet_name="PHOTO STUDIO"):
     """
-    Mengirim perintah update status (Sold, On Hold, Takedown) ke Google Apps Script
+    Mengirim perintah update status (Sold, On Hold, Takedown, Reprice/post) ke Google Apps Script
     Spreadsheet Consignment Listing (Tab PHOTO STUDIO / PHOTO OWNER).
     Kriteria:
-    - Kolom A (Status) diubah menjadi status_text ('Sold', 'On Hold', 'Takedown').
+    - Kolom A (Status) diubah menjadi status_text ('Sold', 'On Hold', 'Takedown', 'Reprice/post').
     - Kolom Tracking Post (L, M, N, O): Kolom yang belum dicentang dihapus centangnya.
     """
     # Normalisasi nilai status_text agar persis sesuai Data Validation Google Sheets
     clean_status = (status_text or "").strip()
-    norm_key = clean_status.lower().replace(" ", "").replace("_", "")
+    norm_key = clean_status.lower().replace(" ", "").replace("_", "").replace("/", "")
     if norm_key in ["takedown", "take"]:
         clean_status = "Takedown"
     elif norm_key in ["sold"]:
         clean_status = "Sold"
     elif norm_key in ["onhold", "hold"]:
         clean_status = "On Hold"
-    elif norm_key in ["reprice"]:
-        clean_status = "Reprice"
+    elif norm_key in ["reprice", "repost", "repricepost"]:
+        clean_status = "Reprice/post"
 
     now_wib = datetime.now(WIB)
     date_str = now_wib.strftime("%d/%m/%y")
@@ -1616,7 +1617,7 @@ def wa_webhook():
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
-                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_ps_res.get('row', '-')} ({sheet_consign_ps_res.get('tracking_checked', '')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_ps_res.get('row', '-')}, {sheet_consign_ps_res.get('tracking_checked', '')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
@@ -1624,7 +1625,7 @@ def wa_webhook():
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
-                    pesan_konfirmasi += f"Tercatat di baris {sheet_consign_po_res.get('row', '-')} ({sheet_consign_po_res.get('tracking_checked', '')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_po_res.get('row', '-')}, {sheet_consign_po_res.get('tracking_checked', '')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
@@ -1922,7 +1923,7 @@ def wa_webhook():
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *Repost* (Baris {sheet_consign_ps_res.get('row', '-')}, {sheet_consign_ps_res.get('tracking_checked', '')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_ps_res.get('row', '-')}, {sheet_consign_ps_res.get('tracking_checked', '')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
@@ -1930,7 +1931,7 @@ def wa_webhook():
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *Repost* (Baris {sheet_consign_po_res.get('row', '-')}, {sheet_consign_po_res.get('tracking_checked', '')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_po_res.get('row', '-')}, {sheet_consign_po_res.get('tracking_checked', '')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 

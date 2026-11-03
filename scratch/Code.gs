@@ -14,26 +14,42 @@ function doPost(e) {
       }
       
       var skuToFindReprice = (data.sku || "").toString().trim().toLowerCase();
+      var baseSkuToFindReprice = skuToFindReprice.replace(/-\d+$/, '');
       var dataRangeReprice = sheetReprice.getDataRange();
       var valuesReprice = dataRangeReprice.getValues();
       var foundRowReprice = -1;
       
       for (var i = 1; i < valuesReprice.length; i++) {
         var statusVal = (valuesReprice[i][0] || "").toString().trim().toLowerCase();
+        var isStatusValid = (statusVal === "available" || statusVal === "reprice" || statusVal === "repost" || statusVal === "reprice/post" || statusVal === "reprice / post");
+        if (!isStatusValid) continue;
+
         var skuVal = (valuesReprice[i][2] || "").toString().trim().toLowerCase();
+        var isSkuMatch = (skuVal === skuToFindReprice || skuVal === baseSkuToFindReprice || skuVal.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, ''));
         
-        if (skuVal === skuToFindReprice && (statusVal === "available" || statusVal === "reprice" || statusVal === "repost")) {
+        if (!isSkuMatch) {
+          for (var j = 0; j < valuesReprice[i].length; j++) {
+            if (j === 2) continue;
+            var cellVal = (valuesReprice[i][j] || "").toString().trim().toLowerCase();
+            if (cellVal === skuToFindReprice || cellVal === baseSkuToFindReprice || cellVal.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, '')) {
+              isSkuMatch = true;
+              break;
+            }
+          }
+        }
+        
+        if (isSkuMatch) {
           foundRowReprice = i + 1;
           break;
         }
       }
       
       if (foundRowReprice === -1) {
-        throw new Error("SKU '" + data.sku + "' dengan status Available/Reprice/Repost tidak ditemukan di tab " + targetSheetName);
+        throw new Error("SKU '" + data.sku + "' dengan status Available / Reprice/post tidak ditemukan di tab " + targetSheetName);
       }
       
       var isRepost = (data.command_type === "REPOST" || data.action === "repost_consignment");
-      var newStatus = isRepost ? "Repost" : "Reprice";
+      var newStatus = "Reprice/post";
       sheetReprice.getRange(foundRowReprice, 1).setValue(newStatus);
       
       var colM = sheetReprice.getRange(foundRowReprice, 13).getValue();
@@ -125,8 +141,23 @@ function doPost(e) {
       var foundRow = -1;
       
       for (var i = values.length - 1; i >= 1; i--) {
+        // Cek kolom C (index 2) terlebih dahulu
         var skuVal = (values[i][2] || "").toString().trim().toLowerCase();
         if (skuVal === skuToFind || skuVal === baseSkuToFind || skuVal.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '')) {
+          foundRow = i + 1;
+          break;
+        }
+        // Jika tidak cocok di kolom C, periksa seluruh kolom pada baris tersebut (misal tab PHOTO OWNER di Kolom B)
+        var rowMatched = false;
+        for (var j = 0; j < values[i].length; j++) {
+          if (j === 2) continue;
+          var cellVal = (values[i][j] || "").toString().trim().toLowerCase();
+          if (cellVal === skuToFind || cellVal === baseSkuToFind || cellVal.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '')) {
+            rowMatched = true;
+            break;
+          }
+        }
+        if (rowMatched) {
           foundRow = i + 1;
           break;
         }
