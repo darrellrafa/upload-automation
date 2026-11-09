@@ -24,7 +24,9 @@ Project ini dibuat untuk mengotomatisasi alur kerja pemasaran dan penjualan prod
 - `processed_urls.json` — daftar URL yang sudah diproses
 - `processed_skus.json` — daftar SKU yang sudah diproses hari ini
 - `pending_youtube_queue.json` — antrean video YouTube
-- `Panduan_*.html` / `.pdf` — dokumentasi panduan penggunaan
+- `Panduan_Penggunaan_Upload_Automation.html` — Panduan operasional lengkap Upload Automation (v2.0, printable A4)
+- `Panduan_Penggunaan_WhatsApp_Bot.html` — Panduan operasional lengkap WhatsApp Bot (v2.0, printable A4)
+- `Panduan_*.pdf` — arsip dokumen panduan format PDF
 - `*.ipynb` — notebook eksperimen / script prototipe
 - `scratch/` — file sementara / eksperimen
 
@@ -111,33 +113,50 @@ Script ini akan secara berkala mengecek postingan Blogger terbaru, mengklasifika
 python flask_app.py
 ```
 
-Server Flask ini dipakai untuk mengolah perintah seperti:
+Server Flask ini dipakai untuk mengolah webhook WhatsApp (Green-API) secara real-time dengan parsing perintah yang sangat fleksibel (pemisah bisa berupa garis miring `/`, titik dua `:`, strip `-`, atau spasi):
 
-- `REPRICE / SKU / HARGA`
-- `HARGA BARU / SKU / HARGA`
-- `TAKEDOWN / SKU`
-- `SOLD / SKU`
-- `ON HOLD / SKU`
-- `REPOST / SKU`
+- **REPRICE / HARGA BARU**:
+  - Format standar: `REPRICE / SKU / HARGA` atau `HARGA BARU / SKU / HARGA`
+  - Format cepat: `REPRICE SKU HARGA` (contoh: `REPRICE 32W8213 150JT` atau `HARGA BARU: 32W8213 150.000.000`)
+  - *Fitur Cerdas*: Kebal terhadap teks `Retail Price:`, mencoret harga jual lama (`Price:`) secara tepat, dan otomatis memperbaiki (auto-heal) postingan lama yang formatnya sempat rusak.
+- **SOLD**:
+  - `SOLD / SKU`, `SOLD: SKU`, `SOLD - SKU`, atau `SOLD SKU`
+  - Otomatis ubah status Shopify menjadi `DRAFT`, set inventory 0, pindahkan postingan Blogspot ke Trash, dan update spreadsheet CONSIGNMENT/SLOW MOVING.
+- **ON HOLD**:
+  - `ON HOLD / SKU`, `HOLD / SKU`, `ON HOLD: SKU`
+  - Otomatis ubah status Shopify menjadi `DRAFT` dan set inventory 0 (postingan Blogspot tetap aktif).
+- **TAKEDOWN**:
+  - `TAKEDOWN / SKU` atau `TAKEDOWN: SKU`
+  - Hapus produk dari live (Shopify `DRAFT` + stok 0 + Blogspot ke Trash).
+- **REPOST**:
+  - `REPOST / SKU` atau `REPOST: SKU`
+  - Khusus postingan Blogspot yang **masih aktif** (bukan di Trash): ubah tanggal publish ke waktu sekarang agar naik ke urutan teratas blog, pasang label `REPOST`, dan catat tanggal `Last Post`. Di Shopify **tidak ada perubahan apa pun**. Spreadsheet consignment diupdate ke status `Reprice/post`.
+- **FOTO**:
+  - `FOTO SKU` atau `CEK SKU`
+  - Menampilkan foto utama jam tangan dan ringkasan deskripsi langsung ke WhatsApp tanpa mengubah status apa pun.
+
+### Fitur Keandalan Webhook:
+- **Fast-path webhook handling**: Webhook status (non-incoming) langsung direspon dalam <1ms agar server tidak terbebani saat spam traffic.
+- **Deduplikasi Pesan (LRU Cache)**: Mencegah eksekusi ganda jika Green-API mengirim ulang event yang sama.
+- **Always 200 OK**: Exception internal selalu ditangkap dan dilaporkan ke WA tanpa melempar HTTP 500, mencegah Green-API melakukan perulangan (retry loop) setiap 60 detik.
 
 ## Workflow Aplikasi
 
 ### Upload automation
 
-1. Script mengambil postingan terbaru dari Blogspot
-2. Cek label seperti `NEW ARRIVAL`
-3. Klasifikasi format berdasarkan label: `PHOTO STUDIO`, `PHOTO OWNER`, `TWP`, atau `NOTSYNC`
-4. Ekstrak data produk dari HTML artikel
-5. Upload ke Shopify
-6. Update spreadsheet terkait
-7. Jika ada asset video di Google Drive, tambahkan ke antrean YouTube Shorts
+1. Script mengambil postingan terbaru dari Blogspot.
+2. Cek label seperti `NEW ARRIVAL`.
+3. Klasifikasi format berdasarkan label: `PHOTO STUDIO`, `PHOTO OWNER`, `TWP`, atau `NOTSYNC`.
+4. Ekstrak data produk dari HTML artikel dengan **Dual-Layer Regex Safeguard** (mencegah salah ambil teks `Retail Price:` sebagai harga jual Shopify).
+5. Upload ke Shopify dan update spreadsheet terkait.
+6. Jika ada asset video di Google Drive, tambahkan ke antrean YouTube Shorts.
 
 ### WhatsApp / webhook bot
 
-1. Menerima perintah dari chat target
-2. Mencari postingan Blogspot berdasarkan SKU
-3. Mengupdate Blogspot, Shopify, dan spreadsheet sesuai perintah
-4. Mengirim balasan status ke WhatsApp
+1. Menerima perintah dari chat target (Grup / Nomor yang diizinkan).
+2. Mencari postingan Blogspot berdasarkan SKU dan mengambil foto jam tangan resolusi tinggi.
+3. Mengupdate Blogspot, Shopify, dan spreadsheet sesuai perintah.
+4. Mengirim balasan konfirmasi WhatsApp beserta foto jam tangan yang bersangkutan.
 
 ## Catatan Penting
 

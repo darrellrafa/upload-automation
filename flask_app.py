@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import time
+from collections import OrderedDict
 import requests
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
@@ -58,6 +60,12 @@ TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "")
 
 # Cache Token Shopify
 SHOPIFY_ACCESS_TOKEN = None
+SHOPIFY_TOKEN_EXPIRY = 0
+
+# Cache Blogger Service & Deduplikasi Pesan WhatsApp
+BLOGGER_SERVICE = None
+PROCESSED_MESSAGE_IDS = OrderedDict()
+MAX_PROCESSED_IDS = 300
 
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PARSING & FORMATTING
@@ -155,20 +163,40 @@ def parse_reprice_chat(message_text):
     # Cara 2: Split standar dengan '/' jika user tidak memakai spasi di sekitar slash
     # Elemen pertama adalah command, elemen terakhir adalah harga, semua elemen di tengah adalah SKU
     parts = [p.strip() for p in message_text.split('/') if p.strip()]
-    if len(parts) < 3:
-        return None
+    if len(parts) >= 3:
+        cmd = parts[0].upper().strip()
+        if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
+            raw_price = parts[-1].strip()
+            numeric_price = parse_price(raw_price)
+            if numeric_price > 0:
+                code = clean_sku_string("/".join(parts[1:-1])).upper()
+                cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
+                return {
+                    "command_type": cmd_type,
+                    "code": code,
+                    "raw_price": raw_price,
+                    "numeric_price": numeric_price,
+                    "formatted_price": format_rupiah(numeric_price)
+                }
 
-    cmd = parts[0].upper().strip()
-    if cmd not in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
-        return None
+    # Cara 3: Dukung format tanpa garis miring: misal 'REPRICE 32W8213 150JT' atau 'HARGA BARU 32W8213 Rp 150.000.000'
+    m_no_slash = re.match(r'^(REPRICE|HARGA\s+BARU)\s+([A-Za-z0-9\-\/]+)\s+(.+)$', message_text.strip(), re.IGNORECASE)
+    if m_no_slash:
+        cmd_raw = m_no_slash.group(1).upper()
+        code_raw = m_no_slash.group(2).strip()
+        price_raw = m_no_slash.group(3).strip()
+        num_price = parse_price(price_raw)
+        if num_price > 0:
+            c_type = "REPRICE" if "REPRICE" in cmd_raw else "HARGA_BARU"
+            return {
+                "command_type": c_type,
+                "code": clean_sku_string(code_raw).upper(),
+                "raw_price": price_raw,
+                "numeric_price": num_price,
+                "formatted_price": format_rupiah(num_price)
+            }
 
-    raw_price = parts[-1].strip()
-    numeric_price = parse_price(raw_price)
-    if numeric_price <= 0:
-        return None
-
-    code = clean_sku_string("/".join(parts[1:-1])).upper()
-    cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
+    return None
 
     return {
         "command_type": cmd_type,
@@ -214,8 +242,7 @@ def parse_takedown_chat(message_text):
     if not rest:
         return None
 
-    if rest.startswith('/'):
-        rest = rest.lstrip('/ \t')
+    rest = rest.lstrip(':/- \t')
 
     if not rest:
         return None
@@ -263,8 +290,7 @@ def parse_repost_chat(message_text):
     if not rest:
         return None
 
-    if rest.startswith('/'):
-        rest = rest.lstrip('/ \t')
+    rest = rest.lstrip(':/- \t')
 
     if not rest:
         return None
@@ -441,6 +467,9 @@ def is_image_url_accessible(url, timeout=5):
     """
     if not url:
         return False
+    # Fast path: URL dari CDN Google / Blogspot / Shopify dijamin valid dan dapat diakses langsung
+    if "googleusercontent.com" in url or "bp.blogspot.com" in url or "cdn.shopify.com" in url:
+        return True
     try:
         r = requests.head(url, timeout=timeout, allow_redirects=True)
         if r.status_code == 200:
@@ -797,16 +826,24 @@ def extract_takedown_description_from_post(post):
 # 3. BLOGGER SERVICE & REPRICE LOGIC
 # ==============================================================================
 def get_blogger_service():
+    global BLOGGER_SERVICE
+    if BLOGGER_SERVICE:
+        return BLOGGER_SERVICE
     if not GCP_REFRESH_TOKEN or not GCP_CLIENT_ID or not GCP_CLIENT_SECRET:
         return None
-    creds = Credentials(
-        token=None,
-        refresh_token=GCP_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GCP_CLIENT_ID,
-        client_secret=GCP_CLIENT_SECRET
-    )
-    return build('blogger', 'v3', credentials=creds)
+    try:
+        creds = Credentials(
+            token=None,
+            refresh_token=GCP_REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=GCP_CLIENT_ID,
+            client_secret=GCP_CLIENT_SECRET
+        )
+        BLOGGER_SERVICE = build('blogger', 'v3', credentials=creds, cache_discovery=False)
+        return BLOGGER_SERVICE
+    except Exception as e:
+        print(f"⚠️ Error inisialisasi Blogger service: {e}")
+        return None
 
 def clean_sku_string(sku_str):
     """
@@ -817,7 +854,8 @@ def clean_sku_string(sku_str):
     if not sku_str:
         return ""
     cleaned = re.sub(r'\(.*?\)', '', str(sku_str))
-    return cleaned.strip(" \t\n\r.,-")
+    cleaned = cleaned.replace('\n', ' ').replace('\r', ' ')
+    return cleaned.strip(" \t\n\r.,-:")
 
 def extract_sku_from_blogger_post(post):
     """Mengekstrak base SKU dan nama owner dari isi postingan Blogspot jika ada."""
@@ -925,7 +963,21 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
         # 2. Update HTML Konten (Harga)
         updated_html = current_html
 
-        # a. Bersihkan Reprice sebelumnya jika berada di container div / separator tersendiri
+        # a. Pulihkan Retail Price jika sebelumnya pernah salah dicoret / disisipkan Reprice
+        updated_html = re.sub(
+            r'(\bRetail\s*(?:<[^>]+>)*\s*Price\s*(?:<[^>]+>)*\s*:[^\n<]*?)\s*(?:<br\s*/?>|\n)?\s*(?:<span[^>]*>)?\s*Reprice\s*:\s*.*?(?=(?:</span>\s*)?</div>|</p|<br\s*/?>|\n|$)',
+            r'\1',
+            updated_html,
+            flags=re.IGNORECASE
+        )
+        updated_html = re.sub(
+            r'(\bRetail\s*(?:<(?:b\b|strong\b|span\b)[^>]*>)?\s*Price\s*(?:</(?:b\b|strong\b|span\b)>)?\s*:\s*)<(?:strike|s)>(.*?)</(?:strike|s)>',
+            r'\1\2',
+            updated_html,
+            flags=re.IGNORECASE
+        )
+
+        # b. Bersihkan Reprice sebelumnya jika berada di container div / separator tersendiri
         updated_html = re.sub(
             r'<div[^>]*class=["\']separator["\'][^>]*>\s*(?:<strike>)?\s*(?:<span[^>]*>)?\s*Reprice\s*:.*?</div>',
             '',
@@ -949,11 +1001,36 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
         updated_html = re.sub(r'<strike>\s*(?:<br\s*/?>)?\s*</strike>', '', updated_html, flags=re.IGNORECASE)
         updated_html = re.sub(r'<span[^>]*>\s*<strike>\s*<span><!--more--></span>\s*</strike>\s*</span>', '', updated_html, flags=re.IGNORECASE)
 
-        # b. Ekstrak teks harga lama (old_price_text)
-        m_price = re.search(r'Price\s*:\s*(.*?)(?=</div>|</p|<br|\n|$)', updated_html, re.IGNORECASE)
+        # c. Cari blok 'Price:' yang BENAR (Bukan Retail Price, dan bukan Reprice)
+        # Mengabaikan Retail Price dan hanya fokus pada teks Price jual utama
+        price_pattern = re.compile(
+            r'(?P<full_match>(?:<(?:b\b|strong\b|span\b)[^>]*>\s*)*\bPrice\b\s*(?:</(?:b\b|strong\b|span\b)>\s*)*:\s*(?P<val>.*?))(?=(?:<span>\s*)?<!--more-->|<!--more-->|(?:</span>\s*)?</div>|</p|<br\s*/?>|\n|$)',
+            re.IGNORECASE
+        )
+
+        matched_span = None
         old_price_text = ""
-        if m_price:
-            raw_val = m_price.group(1)
+
+        for m in price_pattern.finditer(updated_html):
+            start = m.start()
+            preceding = updated_html[:start]
+            last_boundary = max(
+                preceding.rfind('\n'),
+                preceding.rfind('<div'),
+                preceding.rfind('<p'),
+                preceding.rfind('<br'),
+                preceding.rfind('<li>'),
+                preceding.rfind('<tr>'),
+                0
+            )
+            line_context = preceding[last_boundary:start]
+            # Abaikan jika ada tulisan 'retail' pada baris / container sebelum Price
+            if re.search(r'\bretail\b', line_context, re.IGNORECASE):
+                continue
+
+            matched_span = m.span('full_match')
+            raw_val = m.group('val')
+
             strike_m = re.search(r'<(?:strike|s)>(.*?)</(?:strike|s)>', raw_val, re.IGNORECASE)
             target_val = strike_m.group(1) if strike_m else raw_val
             clean_text = re.sub(r'<[^>]+>', '', target_val)
@@ -965,20 +1042,20 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
                     old_price_text = "Rp " + old_price_text
             else:
                 old_price_text = clean_text or formatted_price
+            break
 
         if not old_price_text:
             old_price_text = formatted_price
 
-        # c. Terapkan penggantian seluruh blok harga (mencakup Price, Strike, dan Reprice lama secara utuh)
-        price_full_block_pattern = r'Price\s*:\s*(?:.*?)(?=(?:<span>\s*)?<!--more-->|<!--more-->|(?:</span>\s*)?</div>|</p|\n|$)'
-
+        # d. Terapkan penggantian seluruh blok harga (Price yang sah)
         if command_type == "REPRICE":
             replacement = f"Price: <strike>{old_price_text}</strike><br/>Reprice: <b>{formatted_price}</b>"
         else: # HARGA_BARU
             replacement = f"Price: {formatted_price}"
 
-        if re.search(price_full_block_pattern, updated_html, re.IGNORECASE):
-            updated_html = re.sub(price_full_block_pattern, replacement, updated_html, count=1, flags=re.IGNORECASE)
+        if matched_span:
+            start_idx, end_idx = matched_span
+            updated_html = updated_html[:start_idx] + replacement + updated_html[end_idx:]
         else:
             if command_type == "REPRICE":
                 updated_html += f"<br/>Price: <strike>{formatted_price}</strike><br/>Reprice: <b>{formatted_price}</b>"
@@ -1250,9 +1327,10 @@ def download_all_images_from_blogspot(sku, output_dir=None, post=None):
 # ==============================================================================
 # 4. SHOPIFY GRAPHQL REPRICE LOGIC
 # ==============================================================================
-def get_shopify_token():
-    global SHOPIFY_ACCESS_TOKEN
-    if SHOPIFY_ACCESS_TOKEN:
+def get_shopify_token(force_refresh=False):
+    global SHOPIFY_ACCESS_TOKEN, SHOPIFY_TOKEN_EXPIRY
+    now = time.time()
+    if not force_refresh and SHOPIFY_ACCESS_TOKEN and now < (SHOPIFY_TOKEN_EXPIRY - 600):
         return SHOPIFY_ACCESS_TOKEN
     try:
         tok_res = requests.post(
@@ -1265,8 +1343,14 @@ def get_shopify_token():
             timeout=30
         )
         if tok_res.status_code == 200:
-            SHOPIFY_ACCESS_TOKEN = tok_res.json().get("access_token")
+            data = tok_res.json()
+            SHOPIFY_ACCESS_TOKEN = data.get("access_token")
+            expires_in = int(data.get("expires_in", 86399))
+            SHOPIFY_TOKEN_EXPIRY = now + expires_in
+            print(f"🔄 Berhasil memperbarui access token Shopify baru (berlaku {expires_in} detik).")
             return SHOPIFY_ACCESS_TOKEN
+        else:
+            print(f"⚠️ Gagal request token Shopify: HTTP {tok_res.status_code} - {tok_res.text}")
     except Exception as e:
         print(f"⚠️ Error get Shopify token: {e}")
     return None
@@ -1296,6 +1380,9 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
     if clean_input_sku:
         search_queries.append(f"sku:{clean_input_sku}")
         search_queries.append(f"sku:{clean_input_sku}*") # Wildcard (cocokkan varian bertanda -1, -2)
+        if "/" in clean_input_sku or " " in clean_input_sku or "-" in clean_input_sku:
+            search_queries.append(f"sku:'{clean_input_sku}'")
+            search_queries.append(f"sku:'{clean_input_sku}*'")
     if base_input_sku and base_input_sku != clean_input_sku:
         search_queries.append(f"sku:{base_input_sku}")
         search_queries.append(f"sku:{base_input_sku}*")
@@ -1358,6 +1445,13 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
     for q in search_queries:
         try:
             res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": q}}, timeout=20)
+            if res.status_code == 401:
+                print("🔄 Token Shopify expired (401). Memperbarui token...")
+                token = get_shopify_token(force_refresh=True)
+                if token:
+                    headers["X-Shopify-Access-Token"] = token
+                    res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": q}}, timeout=20)
+
             data = res.json()
             edges = data.get("data", {}).get("products", {}).get("edges", [])
             if not edges:
@@ -1426,6 +1520,12 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
             try:
                 t_query = f"title:\"{search_title}\""
                 res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": t_query}}, timeout=20)
+                if res.status_code == 401:
+                    token = get_shopify_token(force_refresh=True)
+                    if token:
+                        headers["X-Shopify-Access-Token"] = token
+                        res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": t_query}}, timeout=20)
+
                 data = res.json()
                 edges = data.get("data", {}).get("products", {}).get("edges", [])
                 if edges:
@@ -1542,43 +1642,51 @@ def update_shopify_takedown(sku, blogger_post=None):
     stock_zeroed = False
     locations_updated = []
     try:
-        var_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/variants/{numeric_variant_id}.json"
-        v_res = requests.get(var_url, headers=headers, timeout=20)
-        if v_res.status_code == 200:
-            v_data = v_res.json().get("variant", {})
-            inv_item_id = v_data.get("inventory_item_id")
-            if inv_item_id:
-                levels_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?inventory_item_ids={inv_item_id}"
-                l_res = requests.get(levels_url, headers=headers, timeout=20)
-                levels = l_res.json().get("inventory_levels", []) if l_res.status_code == 200 else []
+        inv_item_id = None
+        # Optimasi: Ambil inventory_item_id langsung dari query GraphQL sebelumnya jika tersedia
+        raw_inv_id = matched_variant.get("inventoryItem", {}).get("id")
+        if raw_inv_id:
+            inv_item_id = raw_inv_id.split('/')[-1]
 
-                set_inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
+        if not inv_item_id:
+            var_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/variants/{numeric_variant_id}.json"
+            v_res = requests.get(var_url, headers=headers, timeout=15)
+            if v_res.status_code == 200:
+                v_data = v_res.json().get("variant", {})
+                inv_item_id = v_data.get("inventory_item_id")
 
-                if levels:
-                    for lvl in levels:
-                        loc_id = lvl.get("location_id")
-                        s_res = requests.post(set_inv_url, headers=headers, json={
-                            "location_id": loc_id,
-                            "inventory_item_id": inv_item_id,
-                            "available": 0
-                        }, timeout=20)
-                        if s_res.status_code == 200:
-                            locations_updated.append(loc_id)
-                            stock_zeroed = True
-                else:
-                    loc_res = requests.get(f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/locations.json", headers=headers, timeout=20)
-                    locs = loc_res.json().get("locations", []) if loc_res.status_code == 200 else []
-                    if locs:
-                        s_res = requests.post(set_inv_url, headers=headers, json={
-                            "location_id": locs[0]["id"],
-                            "inventory_item_id": inv_item_id,
-                            "available": 0
-                        }, timeout=20)
-                        if s_res.status_code == 200:
-                            locations_updated.append(locs[0]["id"])
-                            stock_zeroed = True
+        if inv_item_id:
+            levels_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?inventory_item_ids={inv_item_id}"
+            l_res = requests.get(levels_url, headers=headers, timeout=20)
+            levels = l_res.json().get("inventory_levels", []) if l_res.status_code == 200 else []
 
-                print(f"📦 Stok varian {actual_sku} berhasil di-set 0 di {len(locations_updated)} lokasi.")
+            set_inv_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels/set.json"
+
+            if levels:
+                for lvl in levels:
+                    loc_id = lvl.get("location_id")
+                    s_res = requests.post(set_inv_url, headers=headers, json={
+                        "location_id": loc_id,
+                        "inventory_item_id": inv_item_id,
+                        "available": 0
+                    }, timeout=20)
+                    if s_res.status_code == 200:
+                        locations_updated.append(loc_id)
+                        stock_zeroed = True
+            else:
+                loc_res = requests.get(f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/locations.json", headers=headers, timeout=20)
+                locs = loc_res.json().get("locations", []) if loc_res.status_code == 200 else []
+                if locs:
+                    s_res = requests.post(set_inv_url, headers=headers, json={
+                        "location_id": locs[0]["id"],
+                        "inventory_item_id": inv_item_id,
+                        "available": 0
+                    }, timeout=20)
+                    if s_res.status_code == 200:
+                        locations_updated.append(locs[0]["id"])
+                        stock_zeroed = True
+
+            print(f"📦 Stok varian {actual_sku} berhasil di-set 0 di {len(locations_updated)} lokasi.")
     except Exception as e:
         print(f"⚠️ Error ubah stok Shopify ke 0: {e}")
 
@@ -1734,8 +1842,27 @@ def home():
 
 @app.route('/wa-webhook', methods=['POST'])
 def wa_webhook():
+    chat_id = ""
+    sender_name = "Staff"
+    caption = ""
     try:
         payload = request.get_json(force=True) or {}
+
+        # 1. Filter Instan: Hanya proses event pesan masuk (incomingMessageReceived)
+        # Mengabaikan event statusMessage, outgoingAPIMessageReceived, stateInstanceChanged dll dalam < 1ms
+        type_webhook = payload.get("typeWebhook", "")
+        if type_webhook and type_webhook != "incomingMessageReceived":
+            return jsonify({"status": "ignored", "reason": f"Non-incoming webhook type: {type_webhook}"}), 200
+
+        # 2. Deduplikasi Pesan (Mencegah retry / double processing yang membebani antrian worker)
+        id_message = payload.get("idMessage", "")
+        if id_message:
+            if id_message in PROCESSED_MESSAGE_IDS:
+                print(f"⏭️ Diabaikan: Pesan ID '{id_message}' sudah pernah diproses sebelumnya (Deduplikasi).")
+                return jsonify({"status": "ignored", "reason": "Duplicate message ID"}), 200
+            PROCESSED_MESSAGE_IDS[id_message] = time.time()
+            if len(PROCESSED_MESSAGE_IDS) > MAX_PROCESSED_IDS:
+                PROCESSED_MESSAGE_IDS.popitem(last=False)
 
         sender_data = payload.get("senderData", {})
         chat_id = sender_data.get("chatId", "")
@@ -1750,7 +1877,6 @@ def wa_webhook():
         message_data = payload.get("messageData", {})
         type_msg = message_data.get("typeMessage", "")
 
-        caption = ""
         image_url = ""
 
         if type_msg == "imageMessage":
@@ -2276,7 +2402,19 @@ def wa_webhook():
 
     except Exception as e:
         print(f"❌ Error Webhook: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        try:
+            if chat_id and caption:
+                pesan_err = (
+                    f"⚠️ *GAGAL MEMPROSES PERINTAH IDWX*\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 *Pengirim:* {sender_name}\n"
+                    f"📝 *Perintah:* `{caption[:80]}`\n\n"
+                    f"❌ *Kendala:* Terjadi error saat memproses (`{str(e)}`). Silakan coba kirim ulang dalam beberapa saat."
+                )
+                kirim_balasan_wa(chat_id, pesan_err.strip())
+        except Exception as send_err:
+            print(f"⚠️ Gagal mengirim notifikasi error ke WA: {send_err}")
+        return jsonify({"status": "error", "message": str(e)}), 200
 
 @app.route("/api/download_photos", methods=["GET", "POST"])
 def api_download_photos():

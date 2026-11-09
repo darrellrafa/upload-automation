@@ -52,29 +52,41 @@ function doPost(e) {
       var newStatus = "Reprice/post";
       sheetReprice.getRange(foundRowReprice, 1).setValue(newStatus);
       
-      var colM = sheetReprice.getRange(foundRowReprice, 13).getValue();
-      var colN = sheetReprice.getRange(foundRowReprice, 14).getValue();
-      var colO = sheetReprice.getRange(foundRowReprice, 15).getValue();
-      var checkedColName = "";
+      var maxColsReprice = sheetReprice.getMaxColumns();
       
-      if (colM !== true && colM !== "TRUE" && colM !== "true") {
-        sheetReprice.getRange(foundRowReprice, 13).setValue(true);
-        checkedColName = "2ND (Kolom M)";
-      } else if (colN !== true && colN !== "TRUE" && colN !== "true") {
-        sheetReprice.getRange(foundRowReprice, 14).setValue(true);
-        checkedColName = "3RD (Kolom N)";
-      } else if (colO !== true && colO !== "TRUE" && colO !== "true") {
-        sheetReprice.getRange(foundRowReprice, 15).setValue(true);
-        checkedColName = "4TH (Kolom O)";
-      } else {
-        checkedColName = "2ND, 3RD, 4TH (Semua sudah tercentang)";
+      // 1. PASTIKAN KOLOM NOTES (KOLOM G / 7) SELALU DIISI
+      // Kolom Notes dijamin tetap terisi walaupun kolom centang sudah terisi penuh
+      var updatedNotes = "";
+      if (maxColsReprice >= 7) {
+        var existingNotes = (sheetReprice.getRange(foundRowReprice, 7).getValue() || "").toString().trim();
+        var defaultNote = isRepost ? ("REPOST (" + data.date_str + ")") : ("REPRICE " + (data.formatted_price || data.new_price) + " (" + data.date_str + ")");
+        var noteEntry = data.notes_text || defaultNote;
+        updatedNotes = existingNotes ? (existingNotes + String.fromCharCode(10) + noteEntry) : noteEntry;
+        sheetReprice.getRange(foundRowReprice, 7).setValue(updatedNotes);
       }
       
-      var existingNotes = (sheetReprice.getRange(foundRowReprice, 7).getValue() || "").toString().trim();
-      var defaultNote = isRepost ? ("REPOST (" + data.date_str + ")") : ("REPRICE " + (data.formatted_price || data.new_price) + " (" + data.date_str + ")");
-      var noteEntry = data.notes_text || defaultNote;
-      var updatedNotes = existingNotes ? (existingNotes + String.fromCharCode(10) + noteEntry) : noteEntry;
-      sheetReprice.getRange(foundRowReprice, 7).setValue(updatedNotes);
+      // 2. LOGIKA CENTANG TRACKING POST (KOLOM 13/M, 14/N, 15/O)
+      var checkedColName = "";
+      if (targetSheetName === "PHOTO STUDIO" && maxColsReprice >= 15) {
+        var colM = sheetReprice.getRange(foundRowReprice, 13).getValue();
+        var colN = sheetReprice.getRange(foundRowReprice, 14).getValue();
+        var colO = sheetReprice.getRange(foundRowReprice, 15).getValue();
+        
+        if (colM !== true && colM !== "TRUE" && colM !== "true") {
+          sheetReprice.getRange(foundRowReprice, 13).setValue(true);
+          checkedColName = "2ND (Kolom M)";
+        } else if (colN !== true && colN !== "TRUE" && colN !== "true") {
+          sheetReprice.getRange(foundRowReprice, 14).setValue(true);
+          checkedColName = "3RD (Kolom N)";
+        } else if (colO !== true && colO !== "TRUE" && colO !== "true") {
+          sheetReprice.getRange(foundRowReprice, 15).setValue(true);
+          checkedColName = "4TH (Kolom O)";
+        } else {
+          checkedColName = "Centang penuh (Notes tetap terisi)";
+        }
+      } else {
+        checkedColName = "Notes terisi (Tab " + targetSheetName + ")";
+      }
       
       var actionDesc = isRepost ? "di-repost" : "di-reprice";
       return ContentService.createTextOutput(JSON.stringify({
@@ -167,18 +179,21 @@ function doPost(e) {
         throw new Error("SKU '" + data.sku + "' tidak ditemukan di tab " + targetSheetName);
       }
       
+      var maxCols = sheetStatus.getMaxColumns();
       var oldStatus = (sheetStatus.getRange(foundRow, 1).getValue() || "").toString().trim();
-      var photoCell = sheetStatus.getRange(foundRow, 2);
-      var photoFormula = photoCell.getFormula() || "";
-      var photoVal = (photoCell.getValue() || "").toString().trim();
       var sheetPhotoUrl = "";
-      var mPhoto = photoFormula.match(/=IMAGE\(["']([^"']+)["']\)/i);
-      if (mPhoto) {
-        sheetPhotoUrl = mPhoto[1];
-      } else if (photoVal.indexOf("http") === 0) {
-        sheetPhotoUrl = photoVal;
+      if (maxCols >= 2) {
+        var photoCell = sheetStatus.getRange(foundRow, 2);
+        var photoFormula = photoCell.getFormula() || "";
+        var photoVal = (photoCell.getValue() || "").toString().trim();
+        var mPhoto = photoFormula.match(/=IMAGE\(["']([^"']+)["']\)/i);
+        if (mPhoto) {
+          sheetPhotoUrl = mPhoto[1];
+        } else if (photoVal.indexOf("http") === 0) {
+          sheetPhotoUrl = photoVal;
+        }
       }
-      var itemName = (sheetStatus.getRange(foundRow, 4).getValue() || "").toString().trim();
+      var itemName = maxCols >= 4 ? (sheetStatus.getRange(foundRow, 4).getValue() || "").toString().trim() : "";
 
       var newStatus = data.status_text || "Takedown";
       if (newStatus.toString().trim().toLowerCase().replace(/\s+/g, '') === "takedown") {
@@ -186,25 +201,33 @@ function doPost(e) {
       }
       sheetStatus.getRange(foundRow, 1).setValue(newStatus);
       
-      var trackingCols = [12, 13, 14, 15];
+      // Hapus centang jadwal post (hanya relevan untuk PHOTO STUDIO yang memiliki kolom tracking 12, 13, 14, 15)
       var removedCount = 0;
-      for (var k = 0; k < trackingCols.length; k++) {
-        var cell = sheetStatus.getRange(foundRow, trackingCols[k]);
-        var cellVal = cell.getValue();
-        if (cellVal !== true && cellVal !== "TRUE" && cellVal !== "true") {
-          if (typeof cell.removeCheckboxes === "function") {
-            cell.removeCheckboxes();
+      if (targetSheetName === "PHOTO STUDIO") {
+        var trackingCols = [12, 13, 14, 15];
+        for (var k = 0; k < trackingCols.length; k++) {
+          if (trackingCols[k] <= maxCols) {
+            var cell = sheetStatus.getRange(foundRow, trackingCols[k]);
+            var cellVal = cell.getValue();
+            if (cellVal !== true && cellVal !== "TRUE" && cellVal !== "true") {
+              if (typeof cell.removeCheckboxes === "function") {
+                cell.removeCheckboxes();
+              }
+              cell.clearDataValidations();
+              cell.setValue("");
+              removedCount++;
+            }
           }
-          cell.clearDataValidations();
-          cell.setValue("");
-          removedCount++;
         }
       }
       
-      var existingNotes = (sheetStatus.getRange(foundRow, 7).getValue() || "").toString().trim();
-      var noteEntry = newStatus.toUpperCase() + (data.date_str ? (" (" + data.date_str + ")") : "");
-      var updatedNotes = existingNotes ? (existingNotes + String.fromCharCode(10) + noteEntry) : noteEntry;
-      sheetStatus.getRange(foundRow, 7).setValue(updatedNotes);
+      var updatedNotes = "";
+      if (maxCols >= 7) {
+        var existingNotes = (sheetStatus.getRange(foundRow, 7).getValue() || "").toString().trim();
+        var noteEntry = newStatus.toUpperCase() + (data.date_str ? (" (" + data.date_str + ")") : "");
+        updatedNotes = existingNotes ? (existingNotes + String.fromCharCode(10) + noteEntry) : noteEntry;
+        sheetStatus.getRange(foundRow, 7).setValue(updatedNotes);
+      }
       
       return ContentService.createTextOutput(JSON.stringify({
         "status": "success",
