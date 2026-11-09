@@ -596,7 +596,9 @@ def process_notsync(blogger_service, urls):
 
             # --- EKSTRAKSI HARGA & TAHUN ---
             price = "0"
-            price_match = re.search(r'Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            price_match = re.search(r'(?m)^\s*Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            if not price_match:
+                price_match = re.search(r'(?<!retail\s)\bPrice\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
             if price_match: price = re.sub(r'[^\d]', '', price_match.group(1)) or "0"
 
             year = ""
@@ -748,7 +750,9 @@ def process_twp(blogger_service, urls):
 
             # --- EKSTRAKSI HARGA & TAHUN ---
             price = "0"
-            price_match = re.search(r'Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            price_match = re.search(r'(?m)^\s*Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            if not price_match:
+                price_match = re.search(r'(?<!retail\s)\bPrice\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
             if price_match: price = re.sub(r'[^\d]', '', price_match.group(1)) or "0"
 
             year = ""
@@ -949,7 +953,9 @@ def process_photo_studio(blogger_service, urls):
             if ref_match: reference = ref_match.group(1).strip()
 
             price = "0"
-            price_match = re.search(r'Price\s*:\s*(?:Rp\.?\s*)?([\d\.,]+)', body_text, flags=re.IGNORECASE)
+            price_match = re.search(r'(?m)^\s*Price\s*:\s*(?:Rp\.?\s*)?([\d\.,]+)', body_text, flags=re.IGNORECASE)
+            if not price_match:
+                price_match = re.search(r'(?<!retail\s)\bPrice\s*:\s*(?:Rp\.?\s*)?([\d\.,]+)', body_text, flags=re.IGNORECASE)
             if price_match:
                 angka_saja = re.sub(r'[^\d]', '', price_match.group(1))
                 if angka_saja: price = angka_saja
@@ -1184,7 +1190,9 @@ def process_photo_owner(blogger_service, urls):
                 EXISTING_SKUS.add(sku)
 
             price = "0"
-            price_match = re.search(r'Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            price_match = re.search(r'(?m)^\s*Price\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
+            if not price_match:
+                price_match = re.search(r'(?<!retail\s)\bPrice\s*:\s*([^\n]+)', body_text, re.IGNORECASE)
             if price_match:
                 angka_saja = re.sub(r'[^\d]', '', price_match.group(1))
                 if angka_saja: price = angka_saja
