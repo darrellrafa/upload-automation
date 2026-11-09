@@ -1355,15 +1355,109 @@ def get_shopify_token(force_refresh=False):
         print(f"⚠️ Error get Shopify token: {e}")
     return None
 
+def score_shopify_candidate(p_node, vn, clean_input_sku, base_input_sku, canonical_sku, blogger_post=None):
+    """
+    Menghitung skor kecocokan kandidat produk Shopify.
+    Prioritas Utama:
+    1. Produk ACTIVE di etalase live (skor +10000) dibanding produk DRAFT/arsip lama.
+    2. Stok > 0 (skor +3000).
+    3. Kecocokan Base SKU dan varian counter (-1, -2, dll).
+    4. Tanggal pembuatan produk (produk tahun 2026 lebih relevan dibanding 2025).
+    5. Kesamaan tanggal publish Blogspot dengan tanggal dibuat di Shopify (+4000).
+    6. Kesamaan judul jam tangan antara Blogspot dan Shopify.
+    """
+    score = 0
+    v_sku = (vn.get("sku") or "").strip().upper()
+    v_base = re.sub(r'-\d+$', '', v_sku)
+    input_upper = clean_input_sku.upper()
+    base_upper = base_input_sku.upper()
+    status = (p_node.get("status") or "").strip().upper()
+    stock = vn.get("inventoryQuantity") or 0
+    created_at = p_node.get("createdAt") or ""
+    title = (p_node.get("title") or "").strip().upper()
+
+    # 1. STATUS BONUS (Active vs Draft vs Archived)
+    # Operasi (SOLD / ON HOLD / TAKEDOWN / REPRICE) memprioritaskan produk ACTIVE yang sedang live di web
+    if status == "ACTIVE":
+        score += 10000
+    elif status == "DRAFT":
+        score += 0
+    elif status == "ARCHIVED":
+        score -= 2000
+
+    # 2. STOK INVENTARIS
+    if stock > 0:
+        score += 3000
+        score += min(stock, 5) * 50
+
+    # 3. KECOCOKAN BASE SKU
+    if v_base == base_upper:
+        score += 3000
+    elif canonical_sku and v_base == re.sub(r'-\d+$', '', clean_sku_string(canonical_sku)).upper():
+        score += 2500
+
+    # 4. COUNTER SUFFIX BONUS (-1, -2, -3...)
+    counter_match = re.search(r'-(\d+)$', v_sku)
+    input_has_counter = bool(re.search(r'-(\d+)$', input_upper))
+
+    if counter_match:
+        counter_val = int(counter_match.group(1))
+        # Jika user hanya ketik base SKU (misal 136V34W8), prioritaskan varian dengan counter terbaru (-1, -2)
+        if not input_has_counter:
+            score += counter_val * 500
+
+    # 5. KECOCOKAN EKSPLISIT INPUT USER
+    if v_sku == input_upper:
+        if input_has_counter:
+            # Jika user secara eksplisit mengetikkan counter (misal 136V34W8-1)
+            score += 8000
+        else:
+            # User ketik base SKU polos: beri bonus moderat (+1000)
+            # Produk ACTIVE tetap unggul telak atas DRAFT lama (+1000 vs +10000)
+            score += 1000
+
+    # 6. RECENCY BONUS (Berdasarkan createdAt produk di Shopify)
+    if created_at and len(created_at) >= 10:
+        try:
+            year_val = int(created_at[:4])
+            month_val = int(created_at[5:7])
+            day_val = int(created_at[8:10])
+            days_num = year_val * 365 + month_val * 30 + day_val
+            score += days_num * 2
+        except Exception:
+            pass
+
+    # 7. KORELASI DENGAN POSTINGAN BLOGGER
+    if blogger_post:
+        # A. Tanggal dibuat di Shopify sama persis dengan tanggal terbit Blogspot
+        blog_pub = blogger_post.get("published", "")
+        if blog_pub and created_at and blog_pub[:10] == created_at[:10]:
+            score += 4000
+
+        # B. Kemiripan Judul
+        blog_title = (blogger_post.get("title") or "").upper()
+        clean_blog_title = re.sub(r'\[.*?\]', '', blog_title)
+        clean_blog_title = re.sub(r'\s*\(\d{4}\)', '', clean_blog_title).strip()
+        words = [w for w in re.split(r'[^A-Z0-9]+', clean_blog_title) if len(w) >= 3]
+        if words:
+            matching_words = [w for w in words if w in title]
+            if matching_words:
+                score += int((len(matching_words) / len(words)) * 2000)
+
+    return score
+
+
 def find_shopify_product_and_variant(sku, blogger_post=None):
     """
-    Mencari Product dan Variant di Shopify menggunakan strategi Waterfall:
-    Level A: Exact SKU match
-    Level B: Canonical SKU match (dari Blogspot)
-    Level C: Base SKU match (buang -1, -2)
-    Level D: Normalized SKU match (hapus spasi & simbol strip)
-    Level E: Slash parts match (serial ganda movement/case)
-    Level 4: Cross-reference Judul Postingan Blogspot
+    Mencari Product dan Variant di Shopify menggunakan strategi Multi-Candidate Ranking:
+    1. Query GraphQL mencari SKU persis dan Wildcard (sku:SKU*) untuk mencakup counter (-1, -2, dll).
+    2. Mengumpulkan seluruh kandidat yang cocok dengan Base SKU.
+    3. Memberi ranking cerdas via score_shopify_candidate:
+       - Memprioritaskan produk ACTIVE ketimbang produk DRAFT lama (seperti produk 2025).
+       - Memprioritaskan produk yang memiliki stok > 0.
+       - Memprioritaskan produk yang dibuat pada tanggal yang sama dengan artikel Blogspot.
+       - Memprioritaskan varian counter terbaru (-1, -2).
+    4. Fallback ke Cross-Reference Judul Blogspot jika SKU tidak ditemukan sama sekali.
     """
     token = get_shopify_token()
     if not token:
@@ -1377,37 +1471,48 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
     canonical_sku, _ = extract_sku_from_blogger_post(blogger_post) if blogger_post else (None, None)
 
     search_queries = []
+    # 1. Wildcard query pada base SKU: otomatis menjaring SKU polos maupun varian bertanda -1, -2
+    if base_input_sku:
+        search_queries.append(f"sku:{base_input_sku}*")
+        if "/" in base_input_sku or " " in base_input_sku or "-" in base_input_sku:
+            search_queries.append(f"sku:'{base_input_sku}*'")
+
+    # 2. Query persis input SKU
     if clean_input_sku:
-        search_queries.append(f"sku:{clean_input_sku}")
-        search_queries.append(f"sku:{clean_input_sku}*") # Wildcard (cocokkan varian bertanda -1, -2)
+        if f"sku:{clean_input_sku}" not in search_queries:
+            search_queries.append(f"sku:{clean_input_sku}")
         if "/" in clean_input_sku or " " in clean_input_sku or "-" in clean_input_sku:
             search_queries.append(f"sku:'{clean_input_sku}'")
-            search_queries.append(f"sku:'{clean_input_sku}*'")
-    if base_input_sku and base_input_sku != clean_input_sku:
-        search_queries.append(f"sku:{base_input_sku}")
-        search_queries.append(f"sku:{base_input_sku}*")
+
+    # 3. Canonical SKU dari Blogspot
+    if canonical_sku:
+        clean_canonical = clean_sku_string(canonical_sku)
+        base_canonical = re.sub(r'-\d+$', '', clean_canonical)
+        if f"sku:{base_canonical}*" not in search_queries:
+            search_queries.append(f"sku:{base_canonical}*")
+        if f"sku:{clean_canonical}" not in search_queries:
+            search_queries.append(f"sku:{clean_canonical}")
+
+    # 4. Serial ganda dengan garis miring (movement/case)
     if "/" in clean_input_sku:
         slash_parts = [p.strip() for p in clean_input_sku.split('/') if p.strip()]
         for sp in slash_parts:
+            sp_base = re.sub(r'-\d+$', '', sp)
+            if f"sku:{sp_base}*" not in search_queries:
+                search_queries.append(f"sku:{sp_base}*")
             if f"sku:{sp}" not in search_queries:
                 search_queries.append(f"sku:{sp}")
-                search_queries.append(f"sku:{sp}*")
-    if canonical_sku:
-        clean_canonical = clean_sku_string(canonical_sku)
-        if f"sku:{clean_canonical}" not in search_queries:
-            search_queries.append(f"sku:{clean_canonical}")
-            search_queries.append(f"sku:{clean_canonical}*")
-    if clean_input_sku and clean_input_sku not in search_queries:
-        search_queries.append(clean_input_sku)
 
-    product_query = """
+    product_query_with_sort = """
     query getProducts($query: String!) {
-      products(first: 5, query: $query) {
+      products(first: 10, query: $query, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
             id
             title
             status
+            createdAt
+            updatedAt
             featuredImage {
               url
             }
@@ -1438,103 +1543,168 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
     }
     """
 
-    matched_product = None
-    matched_variant = None
-    matched_method = None
+    product_query_simple = """
+    query getProducts($query: String!) {
+      products(first: 10, query: $query) {
+        edges {
+          node {
+            id
+            title
+            status
+            createdAt
+            updatedAt
+            featuredImage {
+              url
+            }
+            images(first: 2) {
+              edges {
+                node {
+                  url
+                }
+              }
+            }
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  sku
+                  price
+                  compareAtPrice
+                  inventoryItem {
+                    id
+                  }
+                  inventoryQuantity
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    candidates = []
+    seen_variant_ids = set()
 
     for q in search_queries:
         try:
-            res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": q}}, timeout=20)
+            res = requests.post(graphql_url, headers=headers, json={"query": product_query_with_sort, "variables": {"query": q}}, timeout=20)
             if res.status_code == 401:
                 print("🔄 Token Shopify expired (401). Memperbarui token...")
                 token = get_shopify_token(force_refresh=True)
                 if token:
                     headers["X-Shopify-Access-Token"] = token
-                    res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": q}}, timeout=20)
+                    res = requests.post(graphql_url, headers=headers, json={"query": product_query_with_sort, "variables": {"query": q}}, timeout=20)
 
-            data = res.json()
+            data = res.json() if res.status_code == 200 else {}
+            # Fallback jika query dengan sortKey tidak didukung
+            if "errors" in data or res.status_code != 200:
+                res = requests.post(graphql_url, headers=headers, json={"query": product_query_simple, "variables": {"query": q}}, timeout=20)
+                data = res.json() if res.status_code == 200 else {}
+
             edges = data.get("data", {}).get("products", {}).get("edges", [])
-            if not edges:
-                continue
-
             for p_edge in edges:
                 p_node = p_edge["node"]
-                for v_edge in p_node["variants"]["edges"]:
+                for v_edge in p_node.get("variants", {}).get("edges", []):
                     vn = v_edge["node"]
-                    v_sku = vn.get("sku", "").strip().upper()
-                    # Level A: Exact match
-                    if v_sku == clean_input_sku.upper():
-                        matched_product = p_node
-                        matched_variant = vn
-                        matched_method = "exact_sku"
-                        break
-                    # Level B: Canonical SKU match (dari Blogspot)
-                    if canonical_sku and v_sku == canonical_sku.strip().upper():
-                        matched_product = p_node
-                        matched_variant = vn
-                        matched_method = "canonical_sku"
-                        break
-                    # Level C: Base SKU match (buang counter -1, -2)
+                    v_id = vn.get("id")
+                    if v_id in seen_variant_ids:
+                        continue
+
+                    v_sku = (vn.get("sku") or "").strip().upper()
                     v_base = re.sub(r'-\d+$', '', v_sku)
-                    if v_base and v_base == base_input_sku.upper():
-                        matched_product = p_node
-                        matched_variant = vn
-                        matched_method = "base_sku"
-                        break
-                    # Level D: Normalized match (hapus simbol strip & spasi)
-                    if re.sub(r'[^A-Z0-9]', '', v_sku) == re.sub(r'[^A-Z0-9]', '', clean_input_sku.upper()):
-                        matched_product = p_node
-                        matched_variant = vn
-                        matched_method = "normalized_sku"
-                        break
-                    # Level E: Match slash parts (misal serial ganda movement/case)
-                    if "/" in clean_input_sku or "/" in v_sku:
+
+                    is_match = False
+                    method = "wildcard"
+                    if v_sku == clean_input_sku.upper():
+                        is_match = True
+                        method = "exact_sku"
+                    elif v_base == base_input_sku.upper():
+                        is_match = True
+                        method = "base_sku_with_counter"
+                    elif canonical_sku and v_sku == clean_sku_string(canonical_sku).upper():
+                        is_match = True
+                        method = "canonical_sku"
+                    elif canonical_sku and v_base == re.sub(r'-\d+$', '', clean_sku_string(canonical_sku)).upper():
+                        is_match = True
+                        method = "canonical_base_sku"
+                    elif re.sub(r'[^A-Z0-9]', '', v_sku) == re.sub(r'[^A-Z0-9]', '', clean_input_sku.upper()):
+                        is_match = True
+                        method = "normalized_sku"
+                    elif "/" in clean_input_sku or "/" in v_sku:
                         input_parts = [p.strip().upper() for p in clean_input_sku.split('/') if p.strip()]
                         v_parts = [p.strip().upper() for p in v_sku.split('/') if p.strip()]
                         if any(ip in v_parts or ip == v_sku for ip in input_parts) or any(vp in input_parts or vp == clean_input_sku.upper() for vp in v_parts):
-                            matched_product = p_node
-                            matched_variant = vn
-                            matched_method = "slash_part_sku"
-                            break
+                            is_match = True
+                            method = "slash_part_sku"
 
-                if matched_variant:
-                    break
-
-            if not matched_variant and edges:
-                matched_product = edges[0]["node"]
-                matched_variant = matched_product["variants"]["edges"][0]["node"]
-                matched_method = "wildcard_fallback"
-
-            if matched_variant:
-                break
+                    if is_match:
+                        seen_variant_ids.add(v_id)
+                        cand_score = score_shopify_candidate(p_node, vn, clean_input_sku, base_input_sku, canonical_sku, blogger_post)
+                        candidates.append({
+                            "score": cand_score,
+                            "product": p_node,
+                            "variant": vn,
+                            "method": method
+                        })
         except Exception as e:
             print(f"⚠️ Error search Shopify with query '{q}': {e}")
 
-    # Level 4 Fallback: Cross-Reference Judul dari Blogspot jika via SKU masih belum ketemu
-    if not matched_variant and blogger_post:
+        # Jika query wildcard/exact ini sudah menemukan kandidat, hentikan iterasi query berikutnya
+        if candidates:
+            break
+
+    # Level Fallback: Cross-Reference Judul dari Blogspot jika via SKU masih belum ketemu sama sekali
+    if not candidates and blogger_post:
         post_title = blogger_post.get("title", "")
         clean_title = re.sub(r'\[.*?\]', '', post_title).strip()
         search_title = re.sub(r'\s*\(\d{4}\)', '', clean_title).strip()
         if search_title:
-            print(f"🔄 SKU '{sku}' tidak ditemukan langsung di Shopify. Mencoba Cross-Reference Judul Blogspot: '{search_title}'...")
+            print(f"🔄 SKU '{sku}' tidak ditemukan via pencarian SKU Shopify. Mencoba Cross-Reference Judul Blogspot: '{search_title}'...")
             try:
                 t_query = f"title:\"{search_title}\""
-                res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": t_query}}, timeout=20)
+                res = requests.post(graphql_url, headers=headers, json={"query": product_query_with_sort, "variables": {"query": t_query}}, timeout=20)
                 if res.status_code == 401:
                     token = get_shopify_token(force_refresh=True)
                     if token:
                         headers["X-Shopify-Access-Token"] = token
-                        res = requests.post(graphql_url, headers=headers, json={"query": product_query, "variables": {"query": t_query}}, timeout=20)
+                        res = requests.post(graphql_url, headers=headers, json={"query": product_query_with_sort, "variables": {"query": t_query}}, timeout=20)
 
-                data = res.json()
+                data = res.json() if res.status_code == 200 else {}
+                if "errors" in data or res.status_code != 200:
+                    res = requests.post(graphql_url, headers=headers, json={"query": product_query_simple, "variables": {"query": t_query}}, timeout=20)
+                    data = res.json() if res.status_code == 200 else {}
+
                 edges = data.get("data", {}).get("products", {}).get("edges", [])
-                if edges:
-                    matched_product = edges[0]["node"]
-                    matched_variant = matched_product["variants"]["edges"][0]["node"]
-                    matched_method = "blogger_title_crossref"
-                    print(f"🎯 Berhasil menemukan produk via Judul Blogspot: '{matched_product['title']}' (SKU: {matched_variant.get('sku')})")
+                for p_edge in edges:
+                    p_node = p_edge["node"]
+                    for v_edge in p_node.get("variants", {}).get("edges", []):
+                        vn = v_edge["node"]
+                        cand_score = score_shopify_candidate(p_node, vn, clean_input_sku, base_input_sku, canonical_sku, blogger_post)
+                        candidates.append({
+                            "score": cand_score,
+                            "product": p_node,
+                            "variant": vn,
+                            "method": "blogger_title_crossref"
+                        })
             except Exception as e:
                 print(f"⚠️ Error search Shopify via title: {e}")
+
+    # Pilih kandidat dengan skor tertinggi
+    matched_product = None
+    matched_variant = None
+    matched_method = None
+
+    if candidates:
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        best = candidates[0]
+        matched_product = best["product"]
+        matched_variant = best["variant"]
+        matched_method = best["method"]
+        print(f"🎯 Terpilih produk Shopify terbaik: '{matched_product.get('title')}' (SKU: {matched_variant.get('sku')}, Status: {matched_product.get('status')}, Stock: {matched_variant.get('inventoryQuantity')}, Created: {matched_product.get('createdAt')}) - Metode: {matched_method} (Score: {best['score']})")
+        if len(candidates) > 1:
+            other_summaries = [f"SKU: {c['variant'].get('sku')}, Status: {c['product'].get('status')}, Stock: {c['variant'].get('inventoryQuantity')}, Score: {c['score']}" for c in candidates[1:]]
+            print(f"ℹ️ Kandidat lain yang diabaikan: {other_summaries}")
 
     return matched_product, matched_variant, matched_method
 
