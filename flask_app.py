@@ -130,7 +130,7 @@ def parse_price(price_str):
     return 0.0
 
 def format_rupiah(num):
-    return f"Rp {int(num):,}".replace(",", ".")
+    return f"Rp {int(num):,}"
 
 def parse_reprice_chat(message_text):
     """
@@ -139,45 +139,46 @@ def parse_reprice_chat(message_text):
     2. HARGA BARU / [KODE] / [HARGA]
     Mendukung SKU yang mengandung karakter garis miring (misal Patek Philippe: 5720232/4642909).
     """
-    if not message_text or "/" not in message_text:
+    if not message_text:
         return None
 
     # Cara 1: Coba split dengan pemisah ' / ' (garis miring berpagar spasi)
-    spaced_parts = [p.strip() for p in re.split(r'\s+/\s+', message_text.strip()) if p.strip()]
-    if len(spaced_parts) >= 3:
-        cmd = spaced_parts[0].upper().strip()
-        if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
-            raw_price = spaced_parts[-1].strip()
-            code = clean_sku_string(" / ".join(spaced_parts[1:-1])).upper()
-            numeric_price = parse_price(raw_price)
-            if numeric_price > 0:
-                cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
-                return {
-                    "command_type": cmd_type,
-                    "code": code,
-                    "raw_price": raw_price,
-                    "numeric_price": numeric_price,
-                    "formatted_price": format_rupiah(numeric_price)
-                }
+    if "/" in message_text:
+        spaced_parts = [p.strip() for p in re.split(r'\s+/\s+', message_text.strip()) if p.strip()]
+        if len(spaced_parts) >= 3:
+            cmd = spaced_parts[0].upper().strip()
+            if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
+                raw_price = spaced_parts[-1].strip()
+                code = clean_sku_string(" / ".join(spaced_parts[1:-1])).upper()
+                numeric_price = parse_price(raw_price)
+                if numeric_price > 0:
+                    cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
+                    return {
+                        "command_type": cmd_type,
+                        "code": code,
+                        "raw_price": raw_price,
+                        "numeric_price": numeric_price,
+                        "formatted_price": format_rupiah(numeric_price)
+                    }
 
-    # Cara 2: Split standar dengan '/' jika user tidak memakai spasi di sekitar slash
-    # Elemen pertama adalah command, elemen terakhir adalah harga, semua elemen di tengah adalah SKU
-    parts = [p.strip() for p in message_text.split('/') if p.strip()]
-    if len(parts) >= 3:
-        cmd = parts[0].upper().strip()
-        if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
-            raw_price = parts[-1].strip()
-            numeric_price = parse_price(raw_price)
-            if numeric_price > 0:
-                code = clean_sku_string("/".join(parts[1:-1])).upper()
-                cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
-                return {
-                    "command_type": cmd_type,
-                    "code": code,
-                    "raw_price": raw_price,
-                    "numeric_price": numeric_price,
-                    "formatted_price": format_rupiah(numeric_price)
-                }
+        # Cara 2: Split standar dengan '/' jika user tidak memakai spasi di sekitar slash
+        # Elemen pertama adalah command, elemen terakhir adalah harga, semua elemen di tengah adalah SKU
+        parts = [p.strip() for p in message_text.split('/') if p.strip()]
+        if len(parts) >= 3:
+            cmd = parts[0].upper().strip()
+            if cmd in ["REPRICE", "HARGA BARU", "HARGA_BARU"]:
+                raw_price = parts[-1].strip()
+                numeric_price = parse_price(raw_price)
+                if numeric_price > 0:
+                    code = clean_sku_string("/".join(parts[1:-1])).upper()
+                    cmd_type = "REPRICE" if cmd == "REPRICE" else "HARGA_BARU"
+                    return {
+                        "command_type": cmd_type,
+                        "code": code,
+                        "raw_price": raw_price,
+                        "numeric_price": numeric_price,
+                        "formatted_price": format_rupiah(numeric_price)
+                    }
 
     # Cara 3: Dukung format tanpa garis miring: misal 'REPRICE 32W8213 150JT' atau 'HARGA BARU 32W8213 Rp 150.000.000'
     m_no_slash = re.match(r'^(REPRICE|HARGA\s+BARU)\s+([A-Za-z0-9\-\/]+)\s+(.+)$', message_text.strip(), re.IGNORECASE)
@@ -197,14 +198,6 @@ def parse_reprice_chat(message_text):
             }
 
     return None
-
-    return {
-        "command_type": cmd_type,
-        "code": code,
-        "raw_price": raw_price,
-        "numeric_price": numeric_price,
-        "formatted_price": format_rupiah(numeric_price)
-    }
 
 def parse_takedown_chat(message_text):
     """
@@ -1037,15 +1030,29 @@ def update_blogger_reprice(service, post, command_type, formatted_price):
             clean_text = clean_text.replace('&nbsp;', ' ').strip()
             curr_m = re.search(r'(?:Rp\.?|IDR)?\s*[\d\.,]+', clean_text, re.IGNORECASE)
             if curr_m:
-                old_price_text = curr_m.group(0).strip()
-                if not old_price_text.upper().startswith("RP") and not old_price_text.upper().startswith("IDR"):
-                    old_price_text = "Rp " + old_price_text
+                raw_old = curr_m.group(0).strip()
+                old_num = parse_price(raw_old)
+                if old_num > 0:
+                    old_price_text = format_rupiah(old_num)
+                else:
+                    old_price_text = raw_old
+                    if not old_price_text.upper().startswith("RP") and not old_price_text.upper().startswith("IDR"):
+                        old_price_text = "Rp " + old_price_text
             else:
-                old_price_text = clean_text or formatted_price
+                old_num = parse_price(clean_text) if clean_text else 0
+                if old_num > 0:
+                    old_price_text = format_rupiah(old_num)
+                else:
+                    old_price_text = clean_text or formatted_price
             break
 
         if not old_price_text:
             old_price_text = formatted_price
+
+        # Pastikan formatted_price menggunakan pemisah ribuan koma secara konsisten (misal: Rp 120,000,000)
+        num_check = parse_price(formatted_price)
+        if num_check > 0:
+            formatted_price = format_rupiah(num_check)
 
         # d. Terapkan penggantian seluruh blok harga (Price yang sah)
         if command_type == "REPRICE":
