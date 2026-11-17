@@ -539,6 +539,102 @@ def reconcile_shopify_product_images(product_id, raw_image_urls, clean_title, ma
     except Exception:
         pass
 
+
+def insert_shopify_sku_html(html, shopify_sku):
+    """
+    Menyisipkan atau memperbarui baris 'SKU Shopify: {shopify_sku}' tepat di bawah baris 'Code:'
+    pada HTML postingan Blogspot.
+    Menjaga konsistensi styling kontainer (div, p, br, font-family, color, dll).
+    """
+    if not html or not shopify_sku:
+        return html
+
+    # Jika sudah pernah ada tulisan SKU Shopify, perbarui nilainya
+    if re.search(r"SKU\s*Shopify\s*:", html, re.IGNORECASE):
+        return re.sub(
+            r"(SKU\s*Shopify\s*:\s*(?:<[^>]+>)*\s*)([\w\-\/]+)",
+            rf"\g<1>{shopify_sku}",
+            html,
+            count=1,
+            flags=re.IGNORECASE
+        )
+
+    # Cari letak teks "Code:"
+    code_match = re.search(r"\bCode\s*:\s*(?:<[^>]+>)*\s*[\w\-\/]+(?:\s*\([^)]*\))?", html, re.IGNORECASE)
+    if not code_match:
+        code_match = re.search(r"\bCode\s*:", html, re.IGNORECASE)
+        if not code_match:
+            return html
+
+    pos = code_match.end()
+    after_code = html[pos:pos+300]
+
+    # Kasus 1: Baris Code berada di dalam tag <div>...</div>
+    close_div = re.search(r"^(.*?</div>)", after_code, re.DOTALL | re.IGNORECASE)
+    if close_div and "<div" not in close_div.group(1):
+        end_idx = pos + close_div.end()
+        preceding = html[:code_match.start()]
+        last_div_open = preceding.rfind("<div")
+        attrs = ""
+        if last_div_open != -1:
+            div_tag = preceding[last_div_open:preceding.find(">", last_div_open)+1]
+            attr_m = re.match(r"<div(?P<attrs>[^>]*)>", div_tag, re.IGNORECASE)
+            if attr_m:
+                attrs = attr_m.group("attrs")
+
+        insertion = f"<div{attrs}>SKU Shopify: {shopify_sku}</div>"
+        return html[:end_idx] + insertion + html[end_idx:]
+
+    # Kasus 2: Baris Code berada di dalam tag <p>...</p>
+    close_p = re.search(r"^(.*?</p>)", after_code, re.DOTALL | re.IGNORECASE)
+    if close_p and "<p" not in close_p.group(1):
+        end_idx = pos + close_p.end()
+        preceding = html[:code_match.start()]
+        last_p_open = preceding.rfind("<p")
+        attrs = ""
+        if last_p_open != -1:
+            p_tag = preceding[last_p_open:preceding.find(">", last_p_open)+1]
+            attr_m = re.match(r"<p(?P<attrs>[^>]*)>", p_tag, re.IGNORECASE)
+            if attr_m:
+                attrs = attr_m.group("attrs")
+
+        insertion = f"<p{attrs}>SKU Shopify: {shopify_sku}</p>"
+        return html[:end_idx] + insertion + html[end_idx:]
+
+    # Kasus 3: Baris Code diakhiri oleh tag <br />
+    close_br = re.search(r"^(.*?<br\s*/?>)", after_code, re.DOTALL | re.IGNORECASE)
+    if close_br:
+        end_idx = pos + close_br.end()
+        insertion = f"SKU Shopify: {shopify_sku}<br />"
+        return html[:end_idx] + insertion + html[end_idx:]
+
+    # Kasus 4: Fallback
+    end_idx = code_match.end()
+    insertion = f"<br />SKU Shopify: {shopify_sku}"
+    return html[:end_idx] + insertion + html[end_idx:]
+
+
+def update_blogger_shopify_sku(blogger_service, post_id, current_html, shopify_sku):
+    """
+    Memperbarui konten artikel di Blogspot untuk menambahkan 'SKU Shopify: {shopify_sku}'
+    di bawah baris 'Code:' ketika produk di Shopify menggunakan varian counter (-1, -2, dll).
+    """
+    if not blogger_service or not post_id or not shopify_sku:
+        return False
+    try:
+        updated_html = insert_shopify_sku_html(current_html, shopify_sku)
+        if updated_html != current_html:
+            patch_body = {"content": updated_html}
+            blogger_service.posts().patch(blogId=BLOG_ID, postId=post_id, body=patch_body).execute()
+            print(f"   📝 Blogspot diperbarui! Menambahkan 'SKU Shopify: {shopify_sku}' di bawah baris Code.")
+            return True
+        else:
+            print(f"   ℹ️ Konten Blogspot sudah memiliki SKU Shopify atau tidak ada perubahan.")
+    except Exception as e:
+        print(f"   ⚠️ Gagal memperbarui Blogspot dengan SKU Shopify: {e}")
+    return False
+
+
 # ==========================================
 # 5. FUNGSI PROSES UNTUK NOTSYNC
 # ==========================================
@@ -557,6 +653,7 @@ def process_notsync(blogger_service, urls):
             request = blogger_service.posts().getByPath(blogId=BLOG_ID, path=post_path)
             response = request.execute()
 
+            post_id = response.get('id')
             raw_title = response.get('title', '')
             raw_html = response.get('content', '')
 
@@ -583,7 +680,7 @@ def process_notsync(blogger_service, urls):
             lines = clean_lines
 
             # --- EKSTRAKSI SKU ---
-            sku = ""
+            sku, base_sku = "", ""
             sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
             if sku_match:
                 base_sku = sku_match.group(1)
@@ -665,6 +762,10 @@ def process_notsync(blogger_service, urls):
                 # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
                 reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
 
+                # Jika SKU di Shopify menggunakan varian counter (-1, -2, dll), tambahkan ke postingan Blogspot
+                if base_sku and sku != base_sku and blogger_service and post_id:
+                    update_blogger_shopify_sku(blogger_service, post_id, raw_html, sku)
+
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
                     requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": mutation, "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}}, timeout=30)
@@ -711,6 +812,7 @@ def process_twp(blogger_service, urls):
             request = blogger_service.posts().getByPath(blogId=BLOG_ID, path=post_path)
             response = request.execute()
 
+            post_id = response.get('id')
             raw_title = response.get('title', '')
             raw_html = response.get('content', '')
 
@@ -737,7 +839,7 @@ def process_twp(blogger_service, urls):
             lines = clean_lines
 
             # --- EKSTRAKSI SKU ---
-            sku = ""
+            sku, base_sku = "", ""
             sku_match = re.search(r'Code:\s*([\w\-\/]+)', body_text, re.IGNORECASE)
             if sku_match:
                 base_sku = sku_match.group(1)
@@ -818,6 +920,10 @@ def process_twp(blogger_service, urls):
 
                 # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
                 reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
+
+                # Jika SKU di Shopify menggunakan varian counter (-1, -2, dll), tambahkan ke postingan Blogspot
+                if base_sku and sku != base_sku and blogger_service and post_id:
+                    update_blogger_shopify_sku(blogger_service, post_id, raw_html, sku)
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"
@@ -900,6 +1006,7 @@ def process_photo_studio(blogger_service, urls):
             request = blogger_service.posts().getByPath(blogId=BLOG_ID, path=post_path)
             response = request.execute()
 
+            post_id = response.get('id')
             raw_title = response.get('title', '')
             raw_html = response.get('content', '')
             labels = response.get('labels', [])
@@ -1027,6 +1134,10 @@ def process_photo_studio(blogger_service, urls):
                 # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
                 reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
 
+                # Jika SKU di Shopify menggunakan varian counter (-1, -2, dll), tambahkan ke postingan Blogspot
+                if base_sku and sku != base_sku and blogger_service and post_id:
+                    update_blogger_shopify_sku(blogger_service, post_id, raw_html, sku)
+
                 if CATEGORY_ID:
                     requests.post(GRAPHQL_URL, headers=HEADERS_SHOPIFY, json={"query": "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }", "variables": {"input": {"id": graphql_product_id, "category": CATEGORY_ID}}}, timeout=30)
 
@@ -1136,6 +1247,7 @@ def process_photo_owner(blogger_service, urls):
             request = blogger_service.posts().getByPath(blogId=BLOG_ID, path=post_path)
             response = request.execute()
 
+            post_id = response.get('id')
             raw_title = response.get('title', '')
             clean_title = re.sub(r'^\[?FOR\s+SALE\]?\s*', '', raw_title, flags=re.IGNORECASE).strip()
             clean_title = re.sub(r'\(\d{4}\)', '', clean_title).strip()
@@ -1242,6 +1354,10 @@ def process_photo_owner(blogger_service, urls):
 
                 # Verifikasi & rekonsiliasi foto seketika agar 100% lengkap
                 reconcile_shopify_product_images(new_id, raw_image_urls, clean_title)
+
+                # Jika SKU di Shopify menggunakan varian counter (-1, -2, dll), tambahkan ke postingan Blogspot
+                if base_sku and sku != base_sku and blogger_service and post_id:
+                    update_blogger_shopify_sku(blogger_service, post_id, raw_html, sku)
 
                 if CATEGORY_ID:
                     mutation = "mutation productUpdate($input: ProductInput!) { productUpdate(input: $input) { userErrors { message } } }"

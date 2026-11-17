@@ -851,19 +851,34 @@ def clean_sku_string(sku_str):
     return cleaned.strip(" \t\n\r.,-:")
 
 def extract_sku_from_blogger_post(post):
-    """Mengekstrak base SKU dan nama owner dari isi postingan Blogspot jika ada."""
+    """
+    Mengekstrak SKU dan nama owner dari isi postingan Blogspot jika ada.
+    Jika postingan memiliki catatan 'SKU Shopify: [sku]', SKU tersebut diutamakan sebagai canonical SKU.
+    """
     if not post:
         return None, None
     content = post.get("content", "")
+
+    # Cek apakah ada catatan spesifik SKU Shopify (misal varian counter seperti 8180D7F9-1)
+    shopify_sku_match = re.search(r'SKU\s*Shopify\s*:\s*(?:<[^>]+>)*\s*([\w\-\/]+)', content, re.IGNORECASE)
+    if not shopify_sku_match:
+        shopify_sku_match = re.search(r'SKU\s*Shopify:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
+    shopify_sku = shopify_sku_match.group(1).strip() if shopify_sku_match else None
+
+    # Base SKU dari baris Code
     sku_match = re.search(r'Code\s*:\s*(?:<[^>]+>)*\s*([\w\-\/]+)', content, re.IGNORECASE)
     if not sku_match:
         sku_match = re.search(r'Code:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
-    sku = sku_match.group(1).strip() if sku_match else None
+    base_sku = sku_match.group(1).strip() if sku_match else None
+
     owner_match = re.search(r'Code\s*:\s*(?:<[^>]+>)*\s*[\w\-\/]+(?:<[^>]+>)*\s*\((.*?)\)', content, re.IGNORECASE)
     if not owner_match:
         owner_match = re.search(r'Code:(?:&nbsp;|\s)*[\w\-\/]+(?:&nbsp;|\s)*\((.*?)\)', content, re.IGNORECASE)
     owner = owner_match.group(1).strip() if owner_match else None
-    return sku, owner
+
+    # Prioritaskan SKU Shopify jika ada, jika tidak ada gunakan base SKU dari Code
+    resolved_sku = shopify_sku if shopify_sku else base_sku
+    return resolved_sku, owner
 
 def find_blogger_post_by_code(service, code, include_drafts=True):
     if not service or not BLOG_ID or not code:
