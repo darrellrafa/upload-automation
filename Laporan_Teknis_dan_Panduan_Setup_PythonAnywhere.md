@@ -1,5 +1,5 @@
 # LAPORAN TEKNIS ARSITEKTUR SISTEM & PANDUAN SETUP PYTHONANYWHERE
-**Dualtime Indonesia Luxury Watch Automation Suite**  
+**Dualtime Indonesia Automation System**  
 *Dokumen Spesifikasi Teknis, Alur Data, dan Prosedur Deployment*
 
 ---
