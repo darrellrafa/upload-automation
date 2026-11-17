@@ -89,15 +89,15 @@ EXISTING_SKUS.add(sku)
 ```
 
 #### C. Reverse-Sync Otomatis ke Blogspot (`insert_shopify_sku_html`)
-Saat jam diunggah dengan counter suffix (misal `8180D7F9-1`), script langsung mengedit konten artikel Blogspot via `posts().patch()`:
+Saat jam diunggah dengan counter suffix (misal `ABC12345-1`), script langsung mengedit konten artikel Blogspot via `posts().patch()`:
 ```html
 <!-- Sebelum -->
-<div style="font-family: Times;">Code: 8180D7F9 (Hendry)</div>
+<div style="font-family: Times;">Code: ABC12345 (Customer A)</div>
 <div style="font-family: Times;">Last Post: 17 Nov 2026</div>
 
 <!-- Sesudah Otomatis Disisipkan -->
-<div style="font-family: Times;">Code: 8180D7F9 (Hendry)</div>
-<div style="font-family: Times;">SKU Shopify: 8180D7F9-1</div>
+<div style="font-family: Times;">Code: ABC12345 (Customer A)</div>
+<div style="font-family: Times;">SKU Shopify: ABC12345-1</div>
 <div style="font-family: Times;">Last Post: 17 Nov 2026</div>
 ```
 > [!NOTE]
@@ -125,7 +125,7 @@ sequenceDiagram
     participant Shop as Shopify Admin API
     participant Sheet as Google Sheets (Apps Script)
 
-    Staff->>GreenAPI: Kirim Perintah (misal: "SOLD 136V34W8")
+    Staff->>GreenAPI: Kirim Perintah (misal: "SOLD XYZ98765")
     GreenAPI->>Flask: POST /webhook (JSON Payload)
     
     Flask->>Flask: Cek Chat ID & Deduplikasi LRU Cache (Fast-Path)
@@ -156,21 +156,21 @@ sequenceDiagram
 
 | Perintah | Format Fleksibel | Efek pada Shopify | Efek pada Blogspot | Efek pada Spreadsheet |
 |---|---|---|---|---|
-| **`REPRICE`** | `REPRICE 136V34W8 150JT`<br>`REPRICE / 136V34W8 / 150000000` | Ubah `price` varian, pasang harga lama di `compare_at_price` | Coret harga lama (`<strike>`), pasang `Reprice: [harga]`, pasang `Last Post: [tgl]` | Ubah status ke `Reprice/post`, centang jadwal berikutnya |
-| **`HARGA BARU`** | `HARGA BARU: 136V34W8 150JT` | Ubah `price` varian, kosongkan `compare_at_price` | Timpa langsung teks `Price:` tanpa coret | Sama dengan Reprice |
-| **`SOLD`** | `SOLD 136V34W8`<br>`SOLD / 136V34W8` | Ubah status ke `DRAFT`, set stok ke `0` | Pindahkan postingan ke Sampah (*Trash*) | Ubah status ke `Sold`, catat notes `SOLD (DD/MM/YY)` |
-| **`ON HOLD`** | `ON HOLD 136V34W8`<br>`HOLD: 136V34W8` | Ubah status ke `DRAFT`, set stok ke `0` | Pindahkan postingan ke Sampah (*Trash*) | Ubah status ke `On Hold`, catat notes `ON HOLD (DD/MM/YY)` |
-| **`TAKEDOWN`** | `TAKEDOWN 136V34W8` | Ubah status ke `DRAFT`, set stok ke `0` | Pindahkan postingan ke Sampah (*Trash*) | Ubah status ke `Takedown`, catat notes `TAKEDOWN (DD/MM/YY)` |
-| **`REPOST`** | `REPOST 136V34W8` | **Tidak ada perubahan** (tetap seperti semula) | **Postingan harus masih aktif**: perbarui tgl publish ke hari ini, pasang label `REPOST` & `Last Post` | Ubah status ke `Reprice/post` |
-| **`FOTO` / `CEK`** | `FOTO 136V34W8` | Tidak ada perubahan (hanya read) | Tidak ada perubahan (hanya read) | Menampilkan ringkasan status & foto resolusi tinggi ke WA |
+| **`REPRICE`** | `REPRICE XYZ98765 150JT`<br>`REPRICE / XYZ98765 / 150000000` | Ubah `price` varian, pasang harga lama di `compare_at_price` | Coret harga lama (`<strike>`), pasang `Reprice: [harga]`, pasang `Last Post: [tgl]` | Ubah status ke `Reprice/post`, centang jadwal berikutnya |
+| **`HARGA BARU`** | `HARGA BARU: XYZ98765 150JT` | Ubah `price` varian, kosongkan `compare_at_price` | Timpa langsung teks `Price:` tanpa coret | Sama dengan Reprice |
+| **`SOLD`** | `SOLD XYZ98765`<br>`SOLD / XYZ98765` | Ubah status ke `DRAFT`, set stok ke `0` | Pindahkan postingan ke Sampah (*Trash*) | Ubah status ke `Sold`, catat notes `SOLD (DD/MM/YY)` |
+| **`ON HOLD`** | `ON HOLD XYZ98765`<br>`HOLD: XYZ98765` | Ubah status ke `DRAFT`, set stok ke `0` | Pindahkan postingan ke Sampah (*Trash*) | Ubah status ke `On Hold`, catat notes `ON HOLD (DD/MM/YY)` |
+| **`TAKEDOWN`** | `TAKEDOWN XYZ98765` | Ubah status ke `DRAFT`, set stok ke `0` | Pindahkan postingan ke Sampah (*Trash*) | Ubah status ke `Takedown`, catat notes `TAKEDOWN (DD/MM/YY)` |
+| **`REPOST`** | `REPOST XYZ98765` | **Tidak ada perubahan** (tetap seperti semula) | **Postingan harus masih aktif**: perbarui tgl publish ke hari ini, pasang label `REPOST` & `Last Post` | Ubah status ke `Reprice/post` |
+| **`FOTO` / `CEK`** | `FOTO XYZ98765` | Tidak ada perubahan (hanya read) | Tidak ada perubahan (hanya read) | Menampilkan ringkasan status & foto resolusi tinggi ke WA |
 
 ---
 
 ### 3.3. Algoritma Pemeringkatan Cerdas (`score_shopify_candidate`)
 
-Masalah umum pada toko jam tangan adalah penggunaan SKU berulang (misal jam Rolex Submariner berkode `136V34W8` yang pernah laku di 2025, lalu datang unit baru di 2026 ber-SKU `136V34W8-1`).
+Masalah umum pada toko jam tangan adalah penggunaan SKU berulang (misal jam berkode `XYZ98765` yang pernah laku di 2025, lalu datang unit baru di 2026 ber-SKU `XYZ98765-1`).
 
-Ketika staf hanya mengetik `SOLD 136V34W8`, sistem menggunakan algoritma skor berikut:
+Ketika staf hanya mengetik `SOLD XYZ98765`, sistem menggunakan algoritma skor berikut:
 
 $$\text{Total Skor} = S_{\text{status}} + S_{\text{stok}} + S_{\text{base}} + S_{\text{counter}} + S_{\text{recency}} + S_{\text{blogger}}$$
 
@@ -179,11 +179,11 @@ $$\text{Total Skor} = S_{\text{status}} + S_{\text{stok}} + S_{\text{base}} + S_
    - `DRAFT`: $+0$ poin
    - `ARCHIVED`: $-2.000$ poin
 2. **Prioritas Counter Generasi Baru ($S_{\text{counter}}$)**:
-   - Jika pengguna mengetik SKU polos (`136V34W8`), varian counter (`-1`, `-2`, `-3`) diberi bonus dominan:
+   - Jika pengguna mengetik SKU polos (`XYZ98765`), varian counter (`-1`, `-2`, `-3`) diberi bonus dominan:
      $$S_{\text{counter}} = +8.000 + (\text{counter\_val} \times 1.000)$$
      *(Menjamin `-2` mengalahkan `-1`, dan `-1` mengalahkan produk polos).*
    - Produk polos tanpa strip hanya mendapat baseline $+100$.
-   - Jika pengguna mengetik eksplisit `136V34W8-1`, kecocokan eksak mendapat bonus mutlak $+50.000$.
+   - Jika pengguna mengetik eksplisit `XYZ98765-1`, kecocokan eksak mendapat bonus mutlak $+50.000$.
 3. **Bobot Tahun / Kebaruan Produk ($S_{\text{recency}}$)**:
    - Diperbesar menjadi $\text{days\_num} \times 10$ sehingga listing tahun 2026 unggul telak atas arsip 2025/2024.
 4. **Korelasi Data Blogspot ($S_{\text{blogger}}$)**:
@@ -314,7 +314,7 @@ from flask_app import app as application
    - **Status Webhook**: Non-aktifkan atau biarkan (sudah ditangani secara sub-milidetik oleh fast-path).
 3. Simpan pengaturan. Coba kirim pesan WhatsApp:
    ```text
-   FOTO 136V34W8
+   FOTO XYZ98765
    ```
    Bot akan merespons dalam 1–3 detik dengan ringkasan status dan foto jam tangan.
 
@@ -373,9 +373,9 @@ touch /var/www/your_username_pythonanywhere_com_wsgi.py
 | Kejadian / Event | Aksi di Blogspot | Aksi di Shopify | Aksi di Google Sheets | Aksi di WhatsApp |
 |---|---|---|---|---|
 | **Upload jam baru bertanda -1/-2** | Sisipkan `SKU Shopify: [SKU]` di bawah `Code:` | Upload produk `ACTIVE`, stok 1, foto lengkap | - | - |
-| **Staf ketik `REPRICE 8180D7F9 1.4M`** | Coret harga lama, tulis Reprice, ubah tgl publish & pasang `Last Post` | Ubah harga varian `8180D7F9-1` & pasang compare price | Status ubah ke `Reprice/post` | Balas laporan detail + foto jam tangan |
-| **Staf ketik `SOLD 8180D7F9`** | Pindahkan artikel ke Sampah (*Trash*) | Ubah status `DRAFT`, set stok ke `0` | Status ubah ke `Sold`, catat `SOLD (tgl)` di Kolom Notes | Balas laporan `🏷️ SOLD` + foto jam tangan |
-| **Staf ketik `ON HOLD 8180D7F9`** | Pindahkan artikel ke Sampah (*Trash*) | Ubah status `DRAFT`, set stok ke `0` | Status ubah ke `On Hold`, catat `ON HOLD (tgl)` di Kolom Notes | Balas laporan `⏸️ ON HOLD` + foto jam tangan |
-| **Staf ketik `TAKEDOWN 8180D7F9`** | Pindahkan artikel ke Sampah (*Trash*) | Ubah status `DRAFT`, set stok ke `0` | Status ubah ke `Takedown`, catat `TAKEDOWN (tgl)` di Kolom Notes | Balas laporan `🗑️ TAKEDOWN` + foto jam tangan |
-| **Staf ketik `REPOST 8180D7F9`** | Ubah tgl publish ke sekarang agar naik ke posisi teratas, pasang label `REPOST` & `Last Post` | **Tidak ada perubahan** | Status ubah ke `Reprice/post` | Balas laporan `🔁 REPOST` + foto jam tangan |
+| **Staf ketik `REPRICE ABC12345 1.4M`** | Coret harga lama, tulis Reprice, ubah tgl publish & pasang `Last Post` | Ubah harga varian `ABC12345-1` & pasang compare price | Status ubah ke `Reprice/post` | Balas laporan detail + foto jam tangan |
+| **Staf ketik `SOLD ABC12345`** | Pindahkan artikel ke Sampah (*Trash*) | Ubah status `DRAFT`, set stok ke `0` | Status ubah ke `Sold`, catat `SOLD (tgl)` di Kolom Notes | Balas laporan `🏷️ SOLD` + foto jam tangan |
+| **Staf ketik `ON HOLD ABC12345`** | Pindahkan artikel ke Sampah (*Trash*) | Ubah status `DRAFT`, set stok ke `0` | Status ubah ke `On Hold`, catat `ON HOLD (tgl)` di Kolom Notes | Balas laporan `⏸️ ON HOLD` + foto jam tangan |
+| **Staf ketik `TAKEDOWN ABC12345`** | Pindahkan artikel ke Sampah (*Trash*) | Ubah status `DRAFT`, set stok ke `0` | Status ubah ke `Takedown`, catat `TAKEDOWN (tgl)` di Kolom Notes | Balas laporan `🗑️ TAKEDOWN` + foto jam tangan |
+| **Staf ketik `REPOST ABC12345`** | Ubah tgl publish ke sekarang agar naik ke posisi teratas, pasang label `REPOST` & `Last Post` | **Tidak ada perubahan** | Status ubah ke `Reprice/post` | Balas laporan `🔁 REPOST` + foto jam tangan |
 
