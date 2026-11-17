@@ -258,9 +258,9 @@ SHOPIFY_CLIENT_ID="your_shopify_client_id"
 SHOPIFY_CLIENT_SECRET="your_shopify_client_secret"
 
 # WhatsApp Bot Gateway (Green-API)
-GREEN_API_ID_INSTANCE="your_instance_id"
+GREEN_API_ID_INSTANCE="your_green_api_id_instance"
 GREEN_API_API_TOKEN="your_green_api_api_token"
-TARGET_GROUP_ID="62817626104-1627455181@g.us, 628120000000@c.us, 628120000000@c.us, 120363000000000000@g.us, 120363000000000001@g.us"
+TARGET_GROUP_ID="your_target_group_ids"
 
 # YouTube BGM Library Folder di Google Drive
 DRIVE_AUDIO_FOLDER_ID="your_drive_audio_folder_id"
@@ -307,7 +307,7 @@ from flask_app import app as application
 
 ### 4.5. Langkah 4: Hubungkan Webhook Green-API
 
-1. Buka console Green-API instance `your_instance_id`.
+1. Buka console Green-API instance Anda.
 2. Masuk ke menu **Webhook Settings**:
    - **URL Webhook**: `https://your_username.pythonanywhere.com/webhook`
    - **Incoming Webhook**: Centang `incomingMessageReceived`
