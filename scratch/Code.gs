@@ -1,3 +1,21 @@
+function getNotesColumnIndex(sheet) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol >= 1) {
+    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    for (var c = 0; c < headers.length; c++) {
+      var h = (headers[c] || "").toString().trim().toUpperCase();
+      if (h === "NOTES" || h === "NOTE" || h.indexOf("NOTES") === 0) {
+        return c + 1; // 1-based index (Col 7 di PHOTO STUDIO, Col 6 di PHOTO OWNER)
+      }
+    }
+  }
+  var sName = (sheet.getName() || "").toUpperCase();
+  if (sName.indexOf("OWNER") !== -1) {
+    return 6; // Column F di tab PHOTO OWNER
+  }
+  return 7; // Column G di tab PHOTO STUDIO
+}
+
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
@@ -53,19 +71,29 @@ function doPost(e) {
       sheetReprice.getRange(foundRowReprice, 1).setValue(newStatus);
       
       var maxColsReprice = sheetReprice.getMaxColumns();
+      var notesCol = getNotesColumnIndex(sheetReprice);
       
-      // 1. PASTIKAN KOLOM NOTES (KOLOM G / 7) SELALU DIISI
-      // Kolom Notes dijamin tetap terisi walaupun kolom centang sudah terisi penuh
+      // 1. PASTIKAN KOLOM NOTES SELALU DIISI (KOLOM 7/G DI PS, KOLOM 6/F DI PO)
       var updatedNotes = "";
-      if (maxColsReprice >= 7) {
-        var existingNotes = (sheetReprice.getRange(foundRowReprice, 7).getValue() || "").toString().trim();
+      if (maxColsReprice >= notesCol) {
+        var existingNotes = (sheetReprice.getRange(foundRowReprice, notesCol).getValue() || "").toString().trim();
         var defaultNote = isRepost ? ("REPOST (" + data.date_str + ")") : ("REPRICE " + (data.formatted_price || data.new_price) + " (" + data.date_str + ")");
         var noteEntry = data.notes_text || defaultNote;
         updatedNotes = existingNotes ? (existingNotes + String.fromCharCode(10) + noteEntry) : noteEntry;
-        sheetReprice.getRange(foundRowReprice, 7).setValue(updatedNotes);
+        sheetReprice.getRange(foundRowReprice, notesCol).setValue(updatedNotes);
       }
       
-      // 2. LOGIKA CENTANG TRACKING POST (KOLOM 13/M, 14/N, 15/O)
+      // Perlindungan kolom SKU (Kolom 7/G) di tab PHOTO OWNER:
+      // Jika sebelumnya pernah keliru tertulis catatan di kolom SKU, pulihkan SKU aslinya
+      if (targetSheetName === "PHOTO OWNER" && maxColsReprice >= 7) {
+        var col7Val = (sheetReprice.getRange(foundRowReprice, 7).getValue() || "").toString().trim();
+        if (col7Val.indexOf("\n") !== -1) {
+          var cleanSkuCol7 = col7Val.split("\n")[0].trim();
+          sheetReprice.getRange(foundRowReprice, 7).setValue(cleanSkuCol7);
+        }
+      }
+      
+      // 2. LOGIKA CENTANG TRACKING POST
       var checkedColName = "";
       if (targetSheetName === "PHOTO STUDIO" && maxColsReprice >= 15) {
         var colM = sheetReprice.getRange(foundRowReprice, 13).getValue();
@@ -83,6 +111,32 @@ function doPost(e) {
           checkedColName = "4TH (Kolom O)";
         } else {
           checkedColName = "Centang penuh (Notes tetap terisi)";
+        }
+      } else if (targetSheetName === "PHOTO OWNER") {
+        // Cek kolom REPOST/REPRICE WEB (Kolom 9/I)
+        if (maxColsReprice >= 9) {
+          sheetReprice.getRange(foundRowReprice, 9).setValue(true);
+        }
+        // Cek tracking post 2nd (Kolom 11/K), 3rd (Kolom 12/L), 4th (Kolom 13/M)
+        if (maxColsReprice >= 13) {
+          var colK = sheetReprice.getRange(foundRowReprice, 11).getValue();
+          var colL = sheetReprice.getRange(foundRowReprice, 12).getValue();
+          var colM = sheetReprice.getRange(foundRowReprice, 13).getValue();
+          
+          if (colK !== true && colK !== "TRUE" && colK !== "true") {
+            sheetReprice.getRange(foundRowReprice, 11).setValue(true);
+            checkedColName = "2ND (Kolom K)";
+          } else if (colL !== true && colL !== "TRUE" && colL !== "true") {
+            sheetReprice.getRange(foundRowReprice, 12).setValue(true);
+            checkedColName = "3RD (Kolom L)";
+          } else if (colM !== true && colM !== "TRUE" && colM !== "true") {
+            sheetReprice.getRange(foundRowReprice, 13).setValue(true);
+            checkedColName = "4TH (Kolom M)";
+          } else {
+            checkedColName = "Centang penuh (Notes tetap terisi)";
+          }
+        } else {
+          checkedColName = "Notes terisi (Tab " + targetSheetName + ")";
         }
       } else {
         checkedColName = "Notes terisi (Tab " + targetSheetName + ")";
@@ -159,7 +213,7 @@ function doPost(e) {
           foundRow = i + 1;
           break;
         }
-        // Jika tidak cocok di kolom C, periksa seluruh kolom pada baris tersebut (misal tab PHOTO OWNER di Kolom B)
+        // Jika tidak cocok di kolom C, periksa seluruh kolom pada baris tersebut (misal tab PHOTO OWNER di Kolom G / H)
         var rowMatched = false;
         for (var j = 0; j < values[i].length; j++) {
           if (j === 2) continue;
@@ -182,8 +236,11 @@ function doPost(e) {
       var maxCols = sheetStatus.getMaxColumns();
       var oldStatus = (sheetStatus.getRange(foundRow, 1).getValue() || "").toString().trim();
       var sheetPhotoUrl = "";
-      if (maxCols >= 2) {
-        var photoCell = sheetStatus.getRange(foundRow, 2);
+      
+      // Ambil foto (PHOTO STUDIO di Col 2/B, PHOTO OWNER di Col 3/C)
+      var photoCol = (targetSheetName === "PHOTO OWNER") ? 3 : 2;
+      if (maxCols >= photoCol) {
+        var photoCell = sheetStatus.getRange(foundRow, photoCol);
         var photoFormula = photoCell.getFormula() || "";
         var photoVal = (photoCell.getValue() || "").toString().trim();
         var mPhoto = photoFormula.match(/=IMAGE\(["']([^"']+)["']\)/i);
@@ -193,7 +250,10 @@ function doPost(e) {
           sheetPhotoUrl = photoVal;
         }
       }
-      var itemName = maxCols >= 4 ? (sheetStatus.getRange(foundRow, 4).getValue() || "").toString().trim() : "";
+      
+      // Ambil nama item (PHOTO STUDIO di Col 4/D, PHOTO OWNER di Col 5/E)
+      var itemCol = (targetSheetName === "PHOTO OWNER") ? 5 : 4;
+      var itemName = maxCols >= itemCol ? (sheetStatus.getRange(foundRow, itemCol).getValue() || "").toString().trim() : "";
 
       var newStatus = data.status_text || "Takedown";
       if (newStatus.toString().trim().toLowerCase().replace(/\s+/g, '') === "takedown") {
@@ -201,32 +261,42 @@ function doPost(e) {
       }
       sheetStatus.getRange(foundRow, 1).setValue(newStatus);
       
-      // Hapus centang jadwal post (hanya relevan untuk PHOTO STUDIO yang memiliki kolom tracking 12, 13, 14, 15)
+      // Hapus centang jadwal post yang belum dicentang
       var removedCount = 0;
-      if (targetSheetName === "PHOTO STUDIO") {
-        var trackingCols = [12, 13, 14, 15];
-        for (var k = 0; k < trackingCols.length; k++) {
-          if (trackingCols[k] <= maxCols) {
-            var cell = sheetStatus.getRange(foundRow, trackingCols[k]);
-            var cellVal = cell.getValue();
-            if (cellVal !== true && cellVal !== "TRUE" && cellVal !== "true") {
-              if (typeof cell.removeCheckboxes === "function") {
-                cell.removeCheckboxes();
-              }
-              cell.clearDataValidations();
-              cell.setValue("");
-              removedCount++;
+      var trackingCols = (targetSheetName === "PHOTO OWNER") ? [9, 10, 11, 12, 13] : [12, 13, 14, 15];
+      for (var k = 0; k < trackingCols.length; k++) {
+        if (trackingCols[k] <= maxCols) {
+          var cell = sheetStatus.getRange(foundRow, trackingCols[k]);
+          var cellVal = cell.getValue();
+          if (cellVal !== true && cellVal !== "TRUE" && cellVal !== "true") {
+            if (typeof cell.removeCheckboxes === "function") {
+              cell.removeCheckboxes();
             }
+            cell.clearDataValidations();
+            cell.setValue("");
+            removedCount++;
           }
         }
       }
       
+      // CATAT NOTES DI SPREADSHEET (KOLOM 7/G DI PS, KOLOM 6/F DI PO)
+      var notesCol = getNotesColumnIndex(sheetStatus);
       var updatedNotes = "";
-      if (maxCols >= 7) {
-        var existingNotes = (sheetStatus.getRange(foundRow, 7).getValue() || "").toString().trim();
-        var noteEntry = newStatus.toUpperCase() + (data.date_str ? (" (" + data.date_str + ")") : "");
+      if (maxCols >= notesCol) {
+        var existingNotes = (sheetStatus.getRange(foundRow, notesCol).getValue() || "").toString().trim();
+        var noteEntry = data.notes_text || (newStatus.toUpperCase() + (data.date_str ? (" (" + data.date_str + ")") : ""));
         updatedNotes = existingNotes ? (existingNotes + String.fromCharCode(10) + noteEntry) : noteEntry;
-        sheetStatus.getRange(foundRow, 7).setValue(updatedNotes);
+        sheetStatus.getRange(foundRow, notesCol).setValue(updatedNotes);
+      }
+      
+      // Perlindungan kolom SKU (Kolom 7/G) di tab PHOTO OWNER:
+      // Jika sebelumnya pernah keliru tertulis catatan di kolom SKU, pulihkan SKU aslinya
+      if (targetSheetName === "PHOTO OWNER" && maxCols >= 7) {
+        var col7Val = (sheetStatus.getRange(foundRow, 7).getValue() || "").toString().trim();
+        if (col7Val.indexOf("\n") !== -1) {
+          var cleanSkuCol7 = col7Val.split("\n")[0].trim();
+          sheetStatus.getRange(foundRow, 7).setValue(cleanSkuCol7);
+        }
       }
       
       return ContentService.createTextOutput(JSON.stringify({

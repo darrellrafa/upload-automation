@@ -1403,34 +1403,41 @@ def score_shopify_candidate(p_node, vn, clean_input_sku, base_input_sku, canonic
     elif canonical_sku and v_base == re.sub(r'-\d+$', '', clean_sku_string(canonical_sku)).upper():
         score += 2500
 
-    # 4. COUNTER SUFFIX BONUS (-1, -2, -3...)
+    # 4. KECOCOKAN EKSPLISIT INPUT USER
     counter_match = re.search(r'-(\d+)$', v_sku)
     input_has_counter = bool(re.search(r'-(\d+)$', input_upper))
 
-    if counter_match:
-        counter_val = int(counter_match.group(1))
-        # Jika user hanya ketik base SKU (misal 136V34W8), prioritaskan varian dengan counter terbaru (-1, -2)
-        if not input_has_counter:
-            score += counter_val * 500
-
-    # 5. KECOCOKAN EKSPLISIT INPUT USER
     if v_sku == input_upper:
         if input_has_counter:
-            # Jika user secara eksplisit mengetikkan counter (misal 136V34W8-1)
-            score += 8000
+            # Jika user secara eksplisit mengetikkan counter persis (misal 136V34W8-1)
+            # Berikan bobot mutlak (+50000) agar langsung terpilih dan tidak terdistraksi varian lain
+            score += 50000
         else:
-            # User ketik base SKU polos: beri bonus moderat (+1000)
-            # Produk ACTIVE tetap unggul telak atas DRAFT lama (+1000 vs +10000)
-            score += 1000
+            # User ketik base SKU polos: hanya beri bonus kecil (+100) sebagai baseline
+            # agar varian counter baru (-1, -2, dll) dapat mengungguli produk lama polos
+            score += 100
+
+    # 5. COUNTER SUFFIX BONUS (-1, -2, -3...)
+    if counter_match:
+        counter_val = int(counter_match.group(1))
+        # Jika user hanya ketik base SKU polos (misal 136V34W8):
+        # Varian dengan counter (-1, -2, -3...) menandakan iterasi/generasi produk yang LEBIH BARU
+        # Berikan prioritas sangat tinggi (+8000 + counter_val * 1000) agar selalu mengalahkan produk lama tanpa strip
+        if not input_has_counter:
+            score += 8000 + (counter_val * 1000)
+        else:
+            # Jika user ketik SKU counter tertentu tapi bukan yang ini
+            score += counter_val * 200
 
     # 6. RECENCY BONUS (Berdasarkan createdAt produk di Shopify)
+    # Bobot diperbesar (x10) agar produk tahun terbaru (misal 2026 vs 2025/2024) unggul signifikan
     if created_at and len(created_at) >= 10:
         try:
             year_val = int(created_at[:4])
             month_val = int(created_at[5:7])
             day_val = int(created_at[8:10])
             days_num = year_val * 365 + month_val * 30 + day_val
-            score += days_num * 2
+            score += days_num * 10
         except Exception:
             pass
 
@@ -1512,7 +1519,7 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
 
     product_query_with_sort = """
     query getProducts($query: String!) {
-      products(first: 10, query: $query, sortKey: CREATED_AT, reverse: true) {
+      products(first: 25, query: $query, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
             id
@@ -1530,7 +1537,7 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
                 }
               }
             }
-            variants(first: 10) {
+            variants(first: 20) {
               edges {
                 node {
                   id
@@ -1552,7 +1559,7 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
 
     product_query_simple = """
     query getProducts($query: String!) {
-      products(first: 10, query: $query) {
+      products(first: 25, query: $query) {
         edges {
           node {
             id
@@ -1570,7 +1577,7 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
                 }
               }
             }
-            variants(first: 10) {
+            variants(first: 20) {
               edges {
                 node {
                   id
@@ -1963,13 +1970,15 @@ def update_consignment_status_sheet(sku, status_text, sheet_name="PHOTO STUDIO")
 
     now_wib = datetime.now(WIB)
     date_str = now_wib.strftime("%d/%m/%y")
+    notes_text = f"{clean_status.upper()} ({date_str})"
 
     payload = {
         "action": "update_consignment_status",
         "sheet_name": sheet_name,
         "sku": sku,
         "status_text": clean_status,
-        "date_str": date_str
+        "date_str": date_str,
+        "notes_text": notes_text
     }
 
     try:
