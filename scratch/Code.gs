@@ -183,35 +183,62 @@ function doPost(e) {
         throw new Error("Tab '" + sheetNameNew + "' tidak ditemukan.");
       }
       
-      var skuToFindNew = (data.sku || "").toString().trim();
+      var skuToFindNew = (data.sku || "").toString().trim().toLowerCase();
+      var baseSkuToFindNew = skuToFindNew.replace(/-\d+$/, '');
       var dataRangeNew = sheetNew.getDataRange();
       var valuesNew = dataRangeNew.getValues();
-      var skuFoundNew = false;
+      var foundRowWeb = -1;
       
-      for (var i = 0; i < valuesNew.length; i++) {
-        var colG = (valuesNew[i].length > 6 ? valuesNew[i][6] : "").toString().trim();
-        var colC = (valuesNew[i][2] || "").toString().trim();
-        if (colG === skuToFindNew || colC === skuToFindNew) {
-          sheetNew.getRange(i + 1, 9).setValue(true); // Kolom 9 (I) Web
-          skuFoundNew = true;
+      // Cari dari baris terbawah ke atas (agar menemukan entri terbaru)
+      for (var i = valuesNew.length - 1; i >= 1; i--) {
+        var colG = (valuesNew[i].length > 6 ? (valuesNew[i][6] || "") : "").toString().trim().toLowerCase();
+        var colC = (valuesNew[i][2] || "").toString().trim().toLowerCase();
+        
+        if (colG === skuToFindNew || colG === baseSkuToFindNew || colG.replace(/-\d+$/, '') === baseSkuToFindNew ||
+            colC === skuToFindNew || colC === baseSkuToFindNew || colC.replace(/-\d+$/, '') === baseSkuToFindNew) {
+          foundRowWeb = i + 1;
           break;
         }
+        
+        var anyColMatched = false;
         for (var j = 0; j < valuesNew[i].length; j++) {
-          if (valuesNew[i][j] === skuToFindNew) {
-            sheetNew.getRange(i + 1, j + 2).setValue(true);
-            skuFoundNew = true;
+          if (j === 2 || j === 6) continue;
+          var cellVal = (valuesNew[i][j] || "").toString().trim().toLowerCase();
+          if (cellVal === skuToFindNew || cellVal === baseSkuToFindNew) {
+            anyColMatched = true;
             break;
           }
         }
-        if (skuFoundNew) break;
+        if (anyColMatched) {
+          foundRowWeb = i + 1;
+          break;
+        }
       }
       
-      if (!skuFoundNew) {
-        throw new Error("SKU '" + skuToFindNew + "' tidak ditemukan di tab " + sheetNameNew);
+      if (foundRowWeb === -1) {
+        throw new Error("SKU '" + data.sku + "' tidak ditemukan di tab " + sheetNameNew);
       }
       
-      return ContentService.createTextOutput(JSON.stringify({"status": "success", "message": "SKU " + skuToFindNew + " berhasil dicentang di Web."}))
-        .setMimeType(ContentService.MimeType.JSON);
+      // Deteksi kolom WEB secara otomatis dari Header Baris 1
+      var webCol = 9; // Default Kolom 9 (I)
+      if (valuesNew.length > 0) {
+        for (var h = 0; h < valuesNew[0].length; h++) {
+          var hName = (valuesNew[0][h] || "").toString().trim().toUpperCase();
+          if (hName === "WEB" || hName.indexOf("WEB") !== -1) {
+            webCol = h + 1;
+            break;
+          }
+        }
+      }
+      
+      sheetNew.getRange(foundRowWeb, webCol).setValue(true);
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        "status": "success",
+        "message": "SKU " + data.sku + " berhasil dicentang di kolom Web (Baris " + foundRowWeb + ")",
+        "row": foundRowWeb,
+        "col": webCol
+      })).setMimeType(ContentService.MimeType.JSON);
     }
 
     // ==============================================================
@@ -366,13 +393,16 @@ function doPost(e) {
       throw new Error("Tab '" + sheetName + "' tidak ditemukan.");
     }
     
-    var skuToFind = data.sku;
+    var skuToFind = (data.sku || "").toString().trim().toLowerCase();
+    var baseSkuToFind = skuToFind.replace(/-\d+$/, '');
     var dataRange = sheet.getDataRange();
     var values = dataRange.getValues();
     var foundRow = -1;
     
-    for (var i = 0; i < values.length; i++) {
-      if (values[i][2] == skuToFind) { 
+    // Scan dari bawah ke atas agar menemukan draf jam paling mutakhir
+    for (var i = values.length - 1; i >= 1; i--) {
+      var skuCell = (values[i][2] || "").toString().trim().toLowerCase();
+      if (skuCell === skuToFind || skuCell === baseSkuToFind || skuCell.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '')) { 
         foundRow = i + 1;
         break;
       }
