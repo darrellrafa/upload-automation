@@ -1198,7 +1198,17 @@ def process_photo_studio(blogger_service, urls):
                             "photo_url": first_image_url,
                             "status": "Publish"
                         }
-                        requests.post(WEBHOOK_CONSIGNMENT_LISTING, json=payload_sheets_lama, timeout=30)
+                        for attempt in range(2):
+                            try:
+                                res_ps = requests.post(WEBHOOK_CONSIGNMENT_LISTING, json=payload_sheets_lama, timeout=60)
+                                if res_ps.status_code == 200:
+                                    break
+                            except requests.exceptions.Timeout:
+                                if attempt == 0:
+                                    print("   ⚠️ Timeout ke Google Apps Script (Photo Studio), mencoba ulang...")
+                                    time.sleep(2)
+                                    continue
+                                raise
                         print(f"   ✅ Apps Script Consignment Listing (Photo Studio) terkirim untuk SKU {sku_pencarian}!")
                     except Exception as e:
                         print(f"   ⚠️ Error Webhook Sheets Consignment Photo Studio: {e}")
@@ -1403,18 +1413,29 @@ def process_photo_owner(blogger_service, urls):
                 try:
                     sku_pencarian = base_sku if 'base_sku' in locals() and base_sku else sku
                     payload_ke_gsheets = {"action": "check_web_owner", "sku": sku_pencarian}
-                    app_res = requests.post(WEBHOOK_CONSIGNMENT_LISTING, json=payload_ke_gsheets, timeout=30)
+                    app_res = None
+                    for attempt in range(2):
+                        try:
+                            app_res = requests.post(WEBHOOK_CONSIGNMENT_LISTING, json=payload_ke_gsheets, timeout=60)
+                            if app_res.status_code == 200:
+                                break
+                        except requests.exceptions.Timeout:
+                            if attempt == 0:
+                                print(f"   ⚠️ Timeout saat menghubungi Apps Script (Owner). Mengulang sekali lagi...")
+                                time.sleep(2)
+                                continue
+                            raise
 
-                    if app_res.status_code == 200:
+                    if app_res and app_res.status_code == 200:
                         try:
                             res_data = app_res.json()
                             if res_data.get("status") == "success":
-                                print(f"   ✅ Apps Script: Kolom WEB berhasil dicentang!")
+                                print(f"   ✅ Apps Script: Kolom WEB berhasil dicentang! (Baris {res_data.get('row', '-')})")
                             else:
                                 print(f"   ⚠️ Apps Script Info: {res_data.get('message')}")
                         except json.JSONDecodeError:
                             print(f"   ⚠️ Gagal parsing JSON dari Apps Script: {app_res.text}")
-                    else:
+                    elif app_res:
                         print(f"   ❌ Gagal menghubungi Apps Script. Status: {app_res.status_code}")
                 except Exception as e:
                     print(f"   ❌ Error saat memanggil Apps Script: {e}")
@@ -1545,7 +1566,10 @@ def classify_and_process_url(blogger_service, url):
         is_twp = any('TWP' in label.upper() for label in labels)
 
         success_urls = []
-        if is_ps:
+        if is_po or sku.startswith("CPO"):
+            print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan {'label CONSIGNMENT_PO' if is_po else 'awalan SKU ' + sku})")
+            success_urls = process_photo_owner(blogger_service, [url])
+        elif is_ps:
             print(f"📌 {url} diklasifikasikan sebagai: PHOTO STUDIO (berdasarkan label CONSIGNMENT_PS)")
             success_urls = process_photo_studio(blogger_service, [url])
         elif is_featured:
@@ -1554,19 +1578,12 @@ def classify_and_process_url(blogger_service, url):
         elif is_notsync:
             print(f"📌 {url} diklasifikasikan sebagai: NOTSYNC (berdasarkan label NOTSYNC)")
             success_urls = process_notsync(blogger_service, [url])
-        elif is_po:
-            print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan label CONSIGNMENT_PO)")
-            success_urls = process_photo_owner(blogger_service, [url])
         elif is_twp:
             print(f"📌 {url} diklasifikasikan sebagai: TWP (The Watch Project - berdasarkan label TWP)")
             success_urls = process_twp(blogger_service, [url])
         else:
-            if sku.startswith("CPO"):
-                print(f"📌 {url} diklasifikasikan sebagai: PHOTO OWNER (berdasarkan awalan SKU {sku})")
-                success_urls = process_photo_owner(blogger_service, [url])
-            else:
-                print(f"⚠️ {url} tidak memiliki label format khusus (SKU '{sku}'). Akan diproses default sebagai PHOTO STUDIO.")
-                success_urls = process_photo_studio(blogger_service, [url])
+            print(f"⚠️ {url} tidak memiliki label format khusus (SKU '{sku}'). Akan diproses default sebagai PHOTO STUDIO.")
+            success_urls = process_photo_studio(blogger_service, [url])
 
         if url in (success_urls or []):
             if sku:

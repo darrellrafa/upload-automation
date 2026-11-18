@@ -191,11 +191,15 @@ function doPost(e) {
       
       // Cari dari baris terbawah ke atas (agar menemukan entri terbaru)
       for (var i = valuesNew.length - 1; i >= 1; i--) {
-        var colG = (valuesNew[i].length > 6 ? (valuesNew[i][6] || "") : "").toString().trim().toLowerCase();
-        var colC = (valuesNew[i][2] || "").toString().trim().toLowerCase();
+        var rawColG = (valuesNew[i].length > 6 ? (valuesNew[i][6] || "") : "").toString().trim().toLowerCase();
+        var rawColC = (valuesNew[i][2] || "").toString().trim().toLowerCase();
+        var colG = rawColG.split('\n')[0].trim();
+        var colC = rawColC.split('\n')[0].trim();
         
-        if (colG === skuToFindNew || colG === baseSkuToFindNew || colG.replace(/-\d+$/, '') === baseSkuToFindNew ||
-            colC === skuToFindNew || colC === baseSkuToFindNew || colC.replace(/-\d+$/, '') === baseSkuToFindNew) {
+        var isMatchG = (colG === skuToFindNew || colG === baseSkuToFindNew || colG.replace(/-\d+$/, '') === baseSkuToFindNew || colG.replace(/\s+/g, '') === skuToFindNew.replace(/\s+/g, '') || rawColG.indexOf(skuToFindNew) === 0);
+        var isMatchC = (colC === skuToFindNew || colC === baseSkuToFindNew || colC.replace(/-\d+$/, '') === baseSkuToFindNew || colC.replace(/\s+/g, '') === skuToFindNew.replace(/\s+/g, '') || rawColC.indexOf(skuToFindNew) === 0);
+        
+        if (isMatchG || isMatchC) {
           foundRowWeb = i + 1;
           break;
         }
@@ -204,7 +208,7 @@ function doPost(e) {
         for (var j = 0; j < valuesNew[i].length; j++) {
           if (j === 2 || j === 6) continue;
           var cellVal = (valuesNew[i][j] || "").toString().trim().toLowerCase();
-          if (cellVal === skuToFindNew || cellVal === baseSkuToFindNew) {
+          if (cellVal === skuToFindNew || cellVal === baseSkuToFindNew || cellVal.split('\n')[0].trim() === skuToFindNew) {
             anyColMatched = true;
             break;
           }
