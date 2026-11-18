@@ -1178,7 +1178,7 @@ def process_photo_studio(blogger_service, urls):
                             "description": display_title_no_year.upper(), "year": year, "condition": condition.upper(),
                             "price": price, "reference": reference, "serial_number": sku_pencarian, "link": url
                         }
-                        res_feat = requests.post(WEBHOOK_SLOW_MOVING_FEATURED, json=payload_featured, timeout=30)
+                        res_feat = requests.post(WEBHOOK_SLOW_MOVING_FEATURED, json=payload_featured, timeout=60)
                         try:
                             res_feat_data = res_feat.json()
                             if res_feat.status_code == 200 and res_feat_data.get("status") == "success": print(f"   📊 Berhasil! {res_feat_data.get('message')}")

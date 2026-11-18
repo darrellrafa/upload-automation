@@ -1,3 +1,14 @@
+function doGet(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets().map(function(s) { return s.getName(); });
+  return ContentService.createTextOutput(JSON.stringify({
+    "status": "active",
+    "message": "Webhook Slow Moving Featured Apps Script is running",
+    "spreadsheet_name": ss.getName(),
+    "available_tabs": sheets
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -8,6 +19,106 @@ function doPost(e) {
     }
 
     var data = JSON.parse(e.postData.contents);
+
+    // =========================================================================
+    // HELPER: PEMETAAN KOLOM (MAPPING) BERDASARKAN TAB & DETEKSI HEADER
+    // =========================================================================
+    // Layout Tab "ALL STOCK" (13 Kolom: A s/d M):
+    // Col A (1) : Indikator Warna Cyan (Kosong)
+    // Col B (2) : DATE (Tanggal)
+    // Col C (3) : STATUS (DIBIARKAN TETAP KOSONG PADA SAAT UPLOAD!)
+    // Col D (4) : NO (Nomor urut otomatis: 1, 2, 3...)
+    // Col E (5) : OWNER (Nama Pemilik / Konsinyasi: AH, OMNI, ONELUXE, dll)
+    // Col F (6) : BRAND (Merek: ROLEX, PATEK PHILIPPE, SEAMASTER, dll)
+    // Col G (7) : DESCRIPTION (Deskripsi / Nama Jam)
+    // Col H (8) : YEAR (Tahun / Tanggal Garansi)
+    // Col I (9) : CONDITION (Kondisi: UNWORN, VERY MINT, WATCH ONLY, dll)
+    // Col J (10): PRICE (Harga Angka numerik pemisah ribuan #,##0)
+    // Col K (11): REFERENCE (Nomor Referensi Jam)
+    // Col L (12): SERIAL NUMBER (SKU / Serial Number Jam)
+    // Col M (13): LINK WEBSITE (URL Produk di Web dualtime.id)
+    // =========================================================================
+    function getSheetColumnMapping(sheet) {
+      var sheetName = sheet.getName();
+      var isAllStock = (sheetName === "ALL STOCK");
+
+      // Default layout tab ALL STOCK
+      var mapping = {
+        headerRow: 1,
+        colIndicator: 1,  // A
+        colDate: 2,       // B
+        colStatus: 3,     // C (Wajib kosong saat upload)
+        colNo: 4,         // D (Auto increment)
+        colOwner: 5,      // E
+        colBrand: 6,      // F
+        colDesc: 7,       // G
+        colYear: 8,       // H
+        colCondition: 9,  // I
+        colPrice: 10,     // J
+        colReference: 11, // K
+        colSerial: 12,    // L
+        colLink: 13,      // M
+        hasStatusCol: true,
+        totalCols: 13
+      };
+
+      if (!isAllStock) {
+        // Fallback untuk tab NEW ARRIVAL (Layout lama 10 kolom)
+        mapping = {
+          headerRow: 1,
+          colIndicator: -1,
+          colDate: 1,       // A
+          colStatus: -1,
+          colNo: -1,
+          colOwner: 2,      // B
+          colBrand: 3,      // C
+          colDesc: 4,       // D
+          colYear: 5,       // E
+          colCondition: 6,  // F
+          colPrice: 7,      // G
+          colReference: 8,  // H
+          colSerial: 9,     // I
+          colLink: 10,      // J
+          hasStatusCol: false,
+          totalCols: 10
+        };
+      }
+
+      // Deteksi dinamis header baris 1 s/d 5 jika teks header tertera jelas
+      var maxScanRows = Math.min(sheet.getLastRow(), 5);
+      if (maxScanRows > 0) {
+        var sampleRows = sheet.getRange(1, 1, maxScanRows, Math.max(sheet.getLastColumn(), 13)).getValues();
+        for (var r = 0; r < sampleRows.length; r++) {
+          var row = sampleRows[r];
+          var matches = 0;
+          var tempMap = {};
+          for (var c = 0; c < row.length; c++) {
+            var h = (row[c] || "").toString().trim().toUpperCase();
+            if (h === "SERIAL NUMBER" || h === "SERIAL" || h === "SKU") { tempMap.colSerial = c + 1; matches++; }
+            else if (h === "PRICE" || h === "HARGA") { tempMap.colPrice = c + 1; matches++; }
+            else if (h === "STATUS") { tempMap.colStatus = c + 1; tempMap.hasStatusCol = true; matches++; }
+            else if (h === "BRAND" || h === "BRAND/TYPE" || h === "MERK") { tempMap.colBrand = c + 1; matches++; }
+            else if (h === "DESCRIPTION" || h === "DESKRIPSI" || h === "ITEM" || h === "NAMA BARANG") { tempMap.colDesc = c + 1; matches++; }
+            else if (h === "OWNER" || h === "TITIP" || h === "NAMA TITIP") { tempMap.colOwner = c + 1; matches++; }
+            else if (h === "DATE" || h === "TANGGAL") { tempMap.colDate = c + 1; matches++; }
+            else if (h === "NO" || h === "NO." || h === "NOMOR") { tempMap.colNo = c + 1; matches++; }
+            else if (h === "YEAR" || h === "TAHUN") { tempMap.colYear = c + 1; matches++; }
+            else if (h === "CONDITION" || h === "KONDISI") { tempMap.colCondition = c + 1; matches++; }
+            else if (h === "REFERENCE" || h === "REF" || h === "NO. REF") { tempMap.colReference = c + 1; matches++; }
+            else if (h === "LINK WEBSITE" || h === "LINK" || h === "URL") { tempMap.colLink = c + 1; matches++; }
+          }
+          if (matches >= 3) {
+            mapping.headerRow = r + 1;
+            for (var k in tempMap) {
+              mapping[k] = tempMap[k];
+            }
+            break;
+          }
+        }
+      }
+
+      return mapping;
+    }
 
     // =========================================================================
     // JALUR 1: REPRICE, HARGA BARU, ATAU UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
@@ -61,46 +172,20 @@ function doPost(e) {
       var matchedDesc = "";
       var oldPriceVal = "";
       var oldStatusVal = "";
-      var colPriceIndex = 9;   // Default Kolom I (PRICE)
-      var colStatusIndex = 2;  // Default Kolom B (STATUS)
-      var hasStatusCol = false;
+      var matchedMapping = null;
 
-      // Cari di antara tab: ALL STOCK atau NEW ARRIVAL
+      // Cari di tab ALL STOCK terlebih dahulu
       for (var sIdx = 0; sIdx < candidateSheets.length; sIdx++) {
         var currentSheet = candidateSheets[sIdx];
+        var mapping = getSheetColumnMapping(currentSheet);
         var sheetValues = currentSheet.getDataRange().getValues();
-        if (sheetValues.length <= 1) continue;
+        if (sheetValues.length <= mapping.headerRow) continue;
 
-        // Deteksi posisi kolom otomatis dari Baris 1 (Header)
-        var headers = sheetValues[0];
-        var colSerial = 11; // Default K
-        var colPrice = 9;   // Default I
-        var colStatus = 2;  // Default B
-        var colBrand = 3;   // Default C (BRAND)
-        var colDesc = 4;    // Default D (DESCRIPTION)
-        var foundStatus = false;
-
-        for (var h = 0; h < headers.length; h++) {
-          var headerText = (headers[h] || "").toString().trim().toUpperCase();
-          if (headerText === "SERIAL NUMBER" || headerText === "SERIAL" || headerText === "SKU") {
-            colSerial = h + 1;
-          } else if (headerText === "PRICE" || headerText === "HARGA") {
-            colPrice = h + 1;
-          } else if (headerText === "STATUS") {
-            colStatus = h + 1;
-            foundStatus = true;
-          } else if (headerText === "BRAND" || headerText === "BRAND/TYPE" || headerText === "MERK") {
-            colBrand = h + 1;
-          } else if (headerText === "DESCRIPTION" || headerText === "DESKRIPSI" || headerText === "ITEM" || headerText === "NAMA BARANG") {
-            colDesc = h + 1;
-          }
-        }
-
-        // Loop data dari baris terakhir ke atas agar mencocokkan listing paling mutakhir
-        for (var r = sheetValues.length - 1; r >= 1; r--) {
+        // Loop data dari baris terakhir ke atas agar mencocokkan data paling mutakhir
+        for (var r = sheetValues.length - 1; r >= mapping.headerRow; r--) {
           var rowData = sheetValues[r];
-          var statusCell = foundStatus ? (rowData[colStatus - 1] || "").toString().trim().toUpperCase() : "";
-          var serialCell = (rowData[colSerial - 1] || "").toString().trim().toUpperCase();
+          var statusCell = mapping.hasStatusCol && mapping.colStatus > 0 ? (rowData[mapping.colStatus - 1] || "").toString().trim().toUpperCase() : "";
+          var serialCell = mapping.colSerial > 0 ? (rowData[mapping.colSerial - 1] || "").toString().trim().toUpperCase() : "";
 
           // Jika aksi adalah REPRICE, lewati yang statusnya sudah SOLD
           if (isRepriceAction && statusCell === "SOLD") continue;
@@ -120,8 +205,8 @@ function doPost(e) {
               var cellParts = serialCell.split('/');
               for (var cp = 0; cp < cellParts.length; cp++) {
                 var cPart = cellParts[cp].trim();
-                for (var st = 0; st < searchTerms.length; st++) {
-                  if (cPart && cPart === searchTerms[st]) {
+                for (var st2 = 0; st2 < searchTerms.length; st2++) {
+                  if (cPart && cPart === searchTerms[st2]) {
                     isMatch = true;
                     break;
                   }
@@ -144,19 +229,17 @@ function doPost(e) {
             foundSheet = currentSheet;
             foundRow = r + 1;
             matchedCellSku = serialCell;
-            matchedBrand = (rowData[colBrand - 1] || rowData[2] || "").toString().trim();
-            matchedDesc = (rowData[colDesc - 1] || rowData[3] || "").toString().trim();
-            oldPriceVal = (rowData[colPrice - 1] || "").toString().trim();
+            matchedBrand = mapping.colBrand > 0 ? (rowData[mapping.colBrand - 1] || "").toString().trim() : "";
+            matchedDesc = mapping.colDesc > 0 ? (rowData[mapping.colDesc - 1] || "").toString().trim() : "";
+            oldPriceVal = mapping.colPrice > 0 ? (rowData[mapping.colPrice - 1] || "").toString().trim() : "";
             oldStatusVal = statusCell;
-            colPriceIndex = colPrice;
-            colStatusIndex = colStatus;
-            hasStatusCol = foundStatus;
+            matchedMapping = mapping;
             break;
           }
         }
 
         if (foundRow !== -1) {
-          break; // Stop jika sudah ketemu di tab pertama
+          break; // Stop jika sudah ketemu di tab prioritas pertama
         }
       }
 
@@ -170,20 +253,23 @@ function doPost(e) {
       var newStatusApplied = oldStatusVal;
 
       // 1. Eksekusi jika Aksi REPRICE / HARGA BARU
-      if (isRepriceAction) {
-        foundSheet.getRange(foundRow, colPriceIndex).setValue(numericPrice);
-        foundSheet.getRange(foundRow, colPriceIndex).setNumberFormat("#,##0");
+      if (isRepriceAction && matchedMapping) {
+        if (matchedMapping.colPrice > 0 && numericPrice > 0) {
+          foundSheet.getRange(foundRow, matchedMapping.colPrice).setValue(numericPrice);
+          foundSheet.getRange(foundRow, matchedMapping.colPrice).setNumberFormat("#,##0");
+        }
 
-        if (hasStatusCol && data.command_type === "REPRICE") {
+        // Tulis "REPRICE" di kolom Status jika ada kolom STATUS
+        if (matchedMapping.hasStatusCol && matchedMapping.colStatus > 0 && data.command_type === "REPRICE") {
           newStatusApplied = "REPRICE";
-          foundSheet.getRange(foundRow, colStatusIndex).setValue(newStatusApplied);
+          foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
         }
       }
 
       // 2. Eksekusi jika Aksi UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
-      if (isStatusAction && hasStatusCol) {
+      if (isStatusAction && matchedMapping && matchedMapping.hasStatusCol && matchedMapping.colStatus > 0) {
         newStatusApplied = (data.status_text || "SOLD").toString().trim().toUpperCase();
-        foundSheet.getRange(foundRow, colStatusIndex).setValue(newStatusApplied);
+        foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
       }
 
       return ContentService.createTextOutput(JSON.stringify({
@@ -208,7 +294,7 @@ function doPost(e) {
     var targetTabName = "ALL STOCK";
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(targetTabName); 
     
-    // Fallback otomatis jika tab ALL STOCK belum dibuat
+    // Fallback otomatis ke NEW ARRIVAL jika tab ALL STOCK belum ada
     if (!sheet) {
       sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("NEW ARRIVAL");
       if (sheet) {
@@ -219,88 +305,22 @@ function doPost(e) {
     if (!sheet) {
       throw new Error("Tab 'ALL STOCK' maupun 'NEW ARRIVAL' tidak ditemukan di Spreadsheet ini.");
     }
-    
+
+    var mapping = getSheetColumnMapping(sheet);
+
     // Konversi harga ke angka numerik murni
     var rawPrice = String(data.price || "").replace(/[^\d]/g, "");
     var numericPriceInput = rawPrice ? Number(rawPrice) : 0;
 
-    // Baca header baris 1 untuk pemetaan kolom otomatis
-    var lastCol = Math.max(sheet.getLastColumn(), 10);
-    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    var rowData = new Array(headers.length);
-    var hasMappedHeader = false;
-    var priceColIndex = -1;
-    var serialColIndex = -1;
-
-    for (var h = 0; h < headers.length; h++) {
-      var headerText = (headers[h] || "").toString().trim().toUpperCase();
-      if (headerText === "DATE" || headerText === "TANGGAL") {
-        rowData[h] = data.date || "";
-        hasMappedHeader = true;
-      } else if (headerText === "STATUS") {
-        rowData[h] = "Available";
-        hasMappedHeader = true;
-      } else if (headerText === "OWNER" || headerText === "TITIP" || headerText === "NAMA TITIP") {
-        rowData[h] = data.owner || "";
-        hasMappedHeader = true;
-      } else if (headerText === "BRAND" || headerText === "BRAND/TYPE" || headerText === "MERK") {
-        rowData[h] = data.brand || "";
-        hasMappedHeader = true;
-      } else if (headerText === "DESCRIPTION" || headerText === "DESKRIPSI" || headerText === "ITEM" || headerText === "NAMA BARANG") {
-        rowData[h] = data.description || "";
-        hasMappedHeader = true;
-      } else if (headerText === "YEAR" || headerText === "TAHUN") {
-        rowData[h] = data.year || "";
-        hasMappedHeader = true;
-      } else if (headerText === "CONDITION" || headerText === "KONDISI") {
-        rowData[h] = data.condition || "";
-        hasMappedHeader = true;
-      } else if (headerText === "PRICE" || headerText === "HARGA") {
-        rowData[h] = numericPriceInput > 0 ? numericPriceInput : (data.price || "");
-        priceColIndex = h + 1;
-        hasMappedHeader = true;
-      } else if (headerText === "REFERENCE" || headerText === "REF" || headerText === "NO. REF") {
-        rowData[h] = data.reference || "";
-        hasMappedHeader = true;
-      } else if (headerText === "SERIAL NUMBER" || headerText === "SERIAL" || headerText === "SKU") {
-        rowData[h] = data.serial_number || "";
-        serialColIndex = h + 1;
-        hasMappedHeader = true;
-      } else if (headerText === "LINK WEBSITE" || headerText === "LINK" || headerText === "URL") {
-        rowData[h] = data.link || "";
-        hasMappedHeader = true;
-      } else {
-        rowData[h] = "";
-      }
-    }
-
-    // Jika header tidak dikenali, gunakan susunan kolom default (A s/d J)
-    if (!hasMappedHeader) {
-      rowData = [
-        data.date,                              // A: DATE 
-        data.owner,                             // B: OWNER
-        data.brand,                             // C: BRAND/TYPE 
-        data.description,                       // D: DESCRIPTION
-        data.year,                              // E: YEAR
-        data.condition,                         // F: CONDITION
-        numericPriceInput > 0 ? numericPriceInput : data.price, // G: PRICE
-        data.reference,                         // H: REFERENCE
-        data.serial_number,                     // I: SERIAL NUMBER
-        data.link                               // J: LINK WEBSITE
-      ];
-      priceColIndex = 7;
-      serialColIndex = 9;
-    }
-    
-    // Cari baris terakhir yang terisi
+    // Cari baris terakhir yang terisi (gunakan kolom BRAND atau DESCRIPTION)
     var lastRow = sheet.getLastRow();
     var insertRow = lastRow + 1;
     if (lastRow > 1) {
-      var checkCol = 3; // Kolom Brand/Type
+      var checkCol = mapping.colBrand > 0 ? mapping.colBrand : (mapping.colDesc > 0 ? mapping.colDesc : 2);
       if (checkCol <= sheet.getLastColumn()) {
         var colVals = sheet.getRange(1, checkCol, lastRow, 1).getValues();
         for (var r = colVals.length - 1; r >= 0; r--) {
-          if (colVals[r][0] !== "") {
+          if ((colVals[r][0] || "").toString().trim() !== "") {
             insertRow = r + 2;
             break;
           }
@@ -308,13 +328,14 @@ function doPost(e) {
       }
     }
 
-    // Cek proteksi duplikasi: Jika serial_number sudah pernah ada di sheet dan aktif, update baris tersebut
+    // Proteksi duplikasi: Jika serial_number sudah pernah ada di sheet, update baris tersebut
     var existingRow = -1;
     var searchSerial = (data.serial_number || "").toString().trim().toUpperCase();
-    if (searchSerial && serialColIndex > 0 && lastRow > 1) {
-      var serialList = sheet.getRange(1, serialColIndex, lastRow, 1).getValues();
+    if (searchSerial && mapping.colSerial > 0 && lastRow > 1) {
+      var serialList = sheet.getRange(1, mapping.colSerial, lastRow, 1).getValues();
       for (var sRow = serialList.length - 1; sRow >= 1; sRow--) {
-        if ((serialList[sRow][0] || "").toString().trim().toUpperCase() === searchSerial) {
+        var cellSerial = (serialList[sRow][0] || "").toString().trim().toUpperCase();
+        if (cellSerial === searchSerial) {
           existingRow = sRow + 1;
           break;
         }
@@ -323,8 +344,101 @@ function doPost(e) {
 
     var targetRow = (existingRow > 0) ? existingRow : insertRow;
     var actionMessage = (existingRow > 0) ? ("Diperbarui di baris " + targetRow) : ("Tersimpan rapi di baris " + targetRow);
-    
-    // Copy Format & Dropdown dari baris di atasnya (hanya jika baris baru)
+
+    // Buat susunan data sesuai pemetaan kolom
+    var rowData = new Array(mapping.totalCols);
+    for (var i = 0; i < rowData.length; i++) {
+      rowData[i] = "";
+    }
+
+    // 1. Indikator Kolom A
+    if (mapping.colIndicator > 0) {
+      rowData[mapping.colIndicator - 1] = "";
+    }
+
+    // 2. Tanggal (Kolom B di ALL STOCK)
+    if (mapping.colDate > 0) {
+      rowData[mapping.colDate - 1] = data.date || "";
+    }
+
+    // 3. STATUS (Kolom C di ALL STOCK)
+    // ATURAN KHUSUS: Kolom C (STATUS) DIBIARKAN TETAP KOSONG ("") PADA SAAT PROSES UPLOAD!
+    if (mapping.colStatus > 0) {
+      if (existingRow > 0) {
+        // Jika hanya update baris lama yang sudah ada statusnya, pertahankan status sebelumnya
+        rowData[mapping.colStatus - 1] = sheet.getRange(existingRow, mapping.colStatus).getValue();
+      } else {
+        // Jika jam baru di-upload: WAJIB KOSONG ("")
+        rowData[mapping.colStatus - 1] = "";
+      }
+    }
+
+    // 4. NO (Nomor urut: Kolom D di ALL STOCK)
+    if (mapping.colNo > 0) {
+      if (existingRow > 0) {
+        // Pertahankan nomor urut lama jika update
+        rowData[mapping.colNo - 1] = sheet.getRange(existingRow, mapping.colNo).getValue();
+      } else {
+        // Ambil nomor baris sebelumnya + 1
+        var nextNo = 1;
+        if (targetRow > 2) {
+          var prevNo = sheet.getRange(targetRow - 1, mapping.colNo).getValue();
+          if (typeof prevNo === 'number' && prevNo > 0) {
+            nextNo = prevNo + 1;
+          } else if (parseInt(prevNo, 10) > 0) {
+            nextNo = parseInt(prevNo, 10) + 1;
+          }
+        }
+        rowData[mapping.colNo - 1] = nextNo;
+      }
+    }
+
+    // 5. OWNER (Kolom E di ALL STOCK)
+    if (mapping.colOwner > 0) {
+      rowData[mapping.colOwner - 1] = data.owner || "";
+    }
+
+    // 6. BRAND (Kolom F di ALL STOCK)
+    if (mapping.colBrand > 0) {
+      rowData[mapping.colBrand - 1] = data.brand || "";
+    }
+
+    // 7. DESCRIPTION (Kolom G di ALL STOCK)
+    if (mapping.colDesc > 0) {
+      rowData[mapping.colDesc - 1] = data.description || "";
+    }
+
+    // 8. YEAR (Kolom H di ALL STOCK)
+    if (mapping.colYear > 0) {
+      rowData[mapping.colYear - 1] = data.year || "";
+    }
+
+    // 9. CONDITION (Kolom I di ALL STOCK)
+    if (mapping.colCondition > 0) {
+      rowData[mapping.colCondition - 1] = data.condition || "";
+    }
+
+    // 10. PRICE (Kolom J di ALL STOCK)
+    if (mapping.colPrice > 0) {
+      rowData[mapping.colPrice - 1] = numericPriceInput > 0 ? numericPriceInput : (data.price || "");
+    }
+
+    // 11. REFERENCE (Kolom K di ALL STOCK)
+    if (mapping.colReference > 0) {
+      rowData[mapping.colReference - 1] = data.reference || "";
+    }
+
+    // 12. SERIAL NUMBER (Kolom L di ALL STOCK)
+    if (mapping.colSerial > 0) {
+      rowData[mapping.colSerial - 1] = data.serial_number || "";
+    }
+
+    // 13. LINK WEBSITE (Kolom M di ALL STOCK)
+    if (mapping.colLink > 0) {
+      rowData[mapping.colLink - 1] = data.link || "";
+    }
+
+    // Copy Format & Validasi data dari baris di atasnya (hanya jika baris baru)
     if (existingRow <= 0 && targetRow > 2) {
       var prevRow = targetRow - 1;
       var numColsToCopy = Math.min(sheet.getLastColumn(), rowData.length);
@@ -335,16 +449,16 @@ function doPost(e) {
         rangeToCopy.copyTo(targetRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
         rangeToCopy.copyTo(targetRange, SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
       } catch (errCopy) {
-        // Abaikan jika sheet belum memiliki validasi
+        // Abaikan jika tidak ada validasi khusus
       }
     }
     
-    // Masukkan / Perbarui data
+    // Tulis data ke Sheet
     sheet.getRange(targetRow, 1, 1, rowData.length).setValues([rowData]);
 
     // Format kolom PRICE dengan format pemisah ribuan (#,##0)
-    if (priceColIndex > 0 && numericPriceInput > 0) {
-      sheet.getRange(targetRow, priceColIndex).setNumberFormat("#,##0");
+    if (mapping.colPrice > 0 && numericPriceInput > 0) {
+      sheet.getRange(targetRow, mapping.colPrice).setNumberFormat("#,##0");
     }
     
     return ContentService.createTextOutput(JSON.stringify({
