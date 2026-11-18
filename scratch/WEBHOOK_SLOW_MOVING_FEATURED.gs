@@ -280,8 +280,8 @@ function doPost(e) {
         newStatusApplied = (data.status_text || "SOLD").toString().trim().toUpperCase();
         foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
 
-        // Jika status SOLD pada tab ALL STOCK: Atur fill color Kolom D sampai L (kolom 4 s/d 12) menjadi merah
-        if (newStatusApplied === "SOLD") {
+        // Jika status SOLD atau ON HOLD pada tab ALL STOCK: Atur fill color Kolom D sampai L (kolom 4 s/d 12) menjadi merah
+        if (newStatusApplied === "SOLD" || newStatusApplied === "ON HOLD" || newStatusApplied === "HOLD") {
           var startCol = 4; // Kolom D
           var endCol = 12;  // Kolom L
           var numCols = (endCol - startCol + 1); // 9 kolom (D, E, F, G, H, I, J, K, L)

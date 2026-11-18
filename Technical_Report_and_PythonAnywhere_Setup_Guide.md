@@ -164,7 +164,7 @@ sequenceDiagram
 | **`REPRICE`** | `REPRICE XYZ98765 150JT`<br>`REPRICE / XYZ98765 / 150000000` | Updates variant `price`, sets old price in `compare_at_price` | Strikethrough old price (`<strike>`), appends `Reprice: [price]`, updates `Last Post: [date]` | Consignment: updates status to `Reprice/post`, appends Notes.<br>Slow Moving: directly overwrites Col J (`PRICE`). |
 | **`HARGA BARU`** | `HARGA BARU: XYZ98765 150JT` | Updates variant `price`, clears `compare_at_price` | Directly overwrites `Price:` text without strikethrough | Identical to Reprice |
 | **`SOLD`** | `SOLD XYZ98765`<br>`SOLD / XYZ98765` | Sets status to `DRAFT`, resets inventory to `0` | Moves article to Trash | Consignment: status `Sold`, notes `SOLD (date)`.<br>Slow Moving (`ALL STOCK`): status `SOLD`, **Columns D to L turn RED (`#ea4335`)**. |
-| **`ON HOLD`** | `ON HOLD XYZ98765`<br>`HOLD: XYZ98765` | Sets status to `DRAFT`, resets inventory to `0` | Moves article to Trash | Consignment: status `On Hold`, notes `ON HOLD (date)`.<br>Slow Moving: status `ON HOLD`. |
+| **`ON HOLD`** | `ON HOLD XYZ98765`<br>`HOLD: XYZ98765` | Sets status to `DRAFT`, resets inventory to `0` | Moves article to Trash | Consignment: status `On Hold`, notes `ON HOLD (date)`.<br>Slow Moving (`ALL STOCK`): status `ON HOLD`, **Columns D to L turn RED (`#ea4335`)**. |
 | **`TAKEDOWN`** | `TAKEDOWN XYZ98765` | Sets status to `DRAFT`, resets inventory to `0` | Moves article to Trash | Consignment: status `Takedown`, removes unticked schedule checkboxes.<br>Slow Moving: status `TAKEDOWN`. |
 | **`REPOST`** | `REPOST XYZ98765` | **No change** (remains as is) | **Post must be live**: bumps publish date to now, appends `REPOST` tag & `Last Post` date | Consignment: status `Reprice/post`, ticks next schedule box. |
 | **`FOTO` / `CEK`** | `FOTO XYZ98765` | Read-only inspection | Read-only inspection | Retrieves watch metadata & sends high-resolution image to WhatsApp group. |
@@ -233,9 +233,9 @@ The automation communicates with three distinct Google Apps Script Webhooks:
 | **M** | **LINK WEBSITE** | Article URL on dualtime.id | Unchanged |
 
 > [!IMPORTANT]
-> **Special Rule for SOLD Status on `ALL STOCK`**:  
-> When a watch is marked `SOLD`:
-> 1. Column C is set to `"SOLD"`.
+> **Special Rule for SOLD and ON HOLD Status on `ALL STOCK`**:  
+> When a watch is marked `SOLD` or `ON HOLD`:
+> 1. Column C is set to `"SOLD"` or `"ON HOLD"`.
 > 2. **Columns D through L (Cols 4 to 12) have their fill color set to RED (`#ea4335`)**.
 > 3. Columns A, B, C, and M retain their original formatting.
 
@@ -418,7 +418,7 @@ touch /var/www/your_username_pythonanywhere_com_wsgi.py
 | **Upload new watch with `-1`/`-2` counter suffix** | Injects `SKU Shopify: [SKU]` directly under `Code:` | Uploads `ACTIVE` product, inventory 1, full media assets | Logs to Consignment Listing & History Foto Studio | - |
 | **Staff sends `REPRICE ABC12345 1.4M`** | Strikes out old price, appends new price, updates `Last Post` date | Updates variant price & sets `compare_at_price` | Consignment: status `Reprice/post`, appends Notes.<br>Slow Moving: directly overwrites Col J (`PRICE`). | Sends detailed report + high-res photo |
 | **Staff sends `SOLD ABC12345`** | Moves article to Trash | Sets status to `DRAFT`, inventory to `0` | Consignment: status `Sold`, notes `SOLD (date)`.<br>Slow Moving (`ALL STOCK`): status `SOLD`, **Cols D to L turn RED (`#ea4335`)**. | Sends `🏷️ LAPORAN SOLD` + photo |
-| **Staff sends `ON HOLD ABC12345`** | Moves article to Trash | Sets status to `DRAFT`, inventory to `0` | Consignment: status `On Hold`, notes `ON HOLD (date)`.<br>Slow Moving: status `ON HOLD`. | Sends `⏸️ LAPORAN ON HOLD` + photo |
+| **Staff sends `ON HOLD ABC12345`** | Moves article to Trash | Sets status to `DRAFT`, inventory to `0` | Consignment: status `On Hold`, notes `ON HOLD (date)`.<br>Slow Moving (`ALL STOCK`): status `ON HOLD`, **Cols D to L turn RED (`#ea4335`)**. | Sends `⏸️ LAPORAN ON HOLD` + photo |
 | **Staff sends `TAKEDOWN ABC12345`** | Moves article to Trash | Sets status to `DRAFT`, inventory to `0` | Consignment: status `Takedown`, unticks schedule boxes.<br>Slow Moving: status `TAKEDOWN`. | Sends `🗑️ LAPORAN TAKEDOWN` + photo |
 | **Staff sends `REPOST ABC12345`** | Bumps publish date to current time to bring post to top, adds `REPOST` tag | **No change** | Consignment: status `Reprice/post`, ticks next schedule box. | Sends `🔁 LAPORAN REPOST` + photo |
 
