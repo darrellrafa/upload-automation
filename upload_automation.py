@@ -66,22 +66,13 @@ SHOPIFY_CLIENT_SECRET = get_required_env("SHOPIFY_CLIENT_SECRET")
 # WEBHOOK GOOGLE APPS SCRIPT (3 SPREADSHEET TARGET)
 # ==============================================================================
 # 1. Spreadsheet Consignment Listing (Tab 'PHOTO STUDIO' & 'PHOTO OWNER')
-WEBHOOK_CONSIGNMENT_LISTING = os.getenv(
-    "WEBHOOK_CONSIGNMENT_LISTING",
-    "https://script.google.com/macros/s/your_apps_script_url/exec"
-)
+WEBHOOK_CONSIGNMENT_LISTING = os.getenv("WEBHOOK_CONSIGNMENT_LISTING", "")
 
 # 2. Spreadsheet History Foto Studio (Tracking Draf Jam Baru & Antrean Video YouTube)
-WEBHOOK_HISTORY_FOTO_STUDIO = os.getenv(
-    "WEBHOOK_HISTORY_FOTO_STUDIO",
-    "https://script.google.com/macros/s/your_apps_script_url/exec"
-)
+WEBHOOK_HISTORY_FOTO_STUDIO = os.getenv("WEBHOOK_HISTORY_FOTO_STUDIO", "")
 
 # 3. Spreadsheet Slow Moving Items (Barang Featured Blogspot Reprice & Stock)
-WEBHOOK_SLOW_MOVING_FEATURED = os.getenv(
-    "WEBHOOK_SLOW_MOVING_FEATURED",
-    "https://script.google.com/macros/s/your_apps_script_url/exec"
-)
+WEBHOOK_SLOW_MOVING_FEATURED = os.getenv("WEBHOOK_SLOW_MOVING_FEATURED", "")
 
 # Daftar Merek IDWX (gabungan dari semua script)
 DAFTAR_MEREK_IDWX = {

@@ -47,11 +47,11 @@ API_VERSION = "2025-01"
 
 # Webhooks Google Apps Script (3 Spreadsheet Target)
 # 1. Spreadsheet Consignment Listing (Tab 'PHOTO STUDIO' & 'PHOTO OWNER')
-APPS_SCRIPT_CONSIGNMENT_URL = os.getenv("WEBHOOK_CONSIGNMENT_LISTING", os.getenv("APPS_SCRIPT_CONSIGNMENT_URL", "https://script.google.com/macros/s/your_apps_script_url/exec"))
+APPS_SCRIPT_CONSIGNMENT_URL = os.getenv("WEBHOOK_CONSIGNMENT_LISTING", os.getenv("APPS_SCRIPT_CONSIGNMENT_URL", ""))
 # 2. Spreadsheet History Foto Studio (Pencatatan Jam Baru / Draft WA)
-APPS_SCRIPT_HISTORY_URL = os.getenv("WEBHOOK_HISTORY_FOTO_STUDIO", os.getenv("APPS_SCRIPT_HISTORY_URL", "https://script.google.com/macros/s/your_apps_script_url/exec"))
+APPS_SCRIPT_HISTORY_URL = os.getenv("WEBHOOK_HISTORY_FOTO_STUDIO", os.getenv("APPS_SCRIPT_HISTORY_URL", ""))
 # 3. Spreadsheet Slow Moving Items (Featured Items Reprice & Stock Tracking)
-APPS_SCRIPT_SLOW_MOVING_URL = os.getenv("WEBHOOK_SLOW_MOVING_FEATURED", os.getenv("APPS_SCRIPT_SLOW_MOVING_URL", "https://script.google.com/macros/s/your_apps_script_url/exec"))
+APPS_SCRIPT_SLOW_MOVING_URL = os.getenv("WEBHOOK_SLOW_MOVING_FEATURED", os.getenv("APPS_SCRIPT_SLOW_MOVING_URL", ""))
 
 # Green-API (WhatsApp Bot)
 GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "")
