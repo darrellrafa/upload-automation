@@ -421,3 +421,4 @@ touch /var/www/your_username_pythonanywhere_com_wsgi.py
 | **Staff sends `ON HOLD ABC12345`** | Moves article to Trash | Sets status to `DRAFT`, inventory to `0` | Consignment: status `On Hold`, notes `ON HOLD (date)`.<br>Slow Moving: status `ON HOLD`. | Sends `⏸️ LAPORAN ON HOLD` + photo |
 | **Staff sends `TAKEDOWN ABC12345`** | Moves article to Trash | Sets status to `DRAFT`, inventory to `0` | Consignment: status `Takedown`, unticks schedule boxes.<br>Slow Moving: status `TAKEDOWN`. | Sends `🗑️ LAPORAN TAKEDOWN` + photo |
 | **Staff sends `REPOST ABC12345`** | Bumps publish date to current time to bring post to top, adds `REPOST` tag | **No change** | Consignment: status `Reprice/post`, ticks next schedule box. | Sends `🔁 LAPORAN REPOST` + photo |
+
