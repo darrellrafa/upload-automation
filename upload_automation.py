@@ -62,20 +62,26 @@ API_VERSION = "2025-01"
 SHOPIFY_CLIENT_ID = get_required_env("SHOPIFY_CLIENT_ID")
 SHOPIFY_CLIENT_SECRET = get_required_env("SHOPIFY_CLIENT_SECRET")
 
-# URL Webhook (Apps Script)
-# 1. Spreadsheet Consignment Listing (Tab PHOTO STUDIO & Tab PHOTO OWNER)
-Consignment_Listing_Photo_Studio = "https://script.google.com/macros/s/your_apps_script_url/exec"
-Consignment_Listing_Photo_Owner = "https://script.google.com/macros/s/your_apps_script_url/exec"
-CONSIGNMENT_LISTING_PHOTO_STUDIO = Consignment_Listing_Photo_Studio
-CONSIGNMENT_LISTING_PHOTO_OWNER = Consignment_Listing_Photo_Owner
-GOOGLE_WEB_APP_URL = Consignment_Listing_Photo_Studio
-OWNER_APPS_SCRIPT_URL = Consignment_Listing_Photo_Owner
+# ==============================================================================
+# WEBHOOK GOOGLE APPS SCRIPT (3 SPREADSHEET TARGET)
+# ==============================================================================
+# 1. Spreadsheet Consignment Listing (Tab 'PHOTO STUDIO' & 'PHOTO OWNER')
+WEBHOOK_CONSIGNMENT_LISTING = os.getenv(
+    "WEBHOOK_CONSIGNMENT_LISTING",
+    "https://script.google.com/macros/s/your_apps_script_url/exec"
+)
 
-# 2. Spreadsheet History Foto Studio (Tracking Draf Jam Baru & Antrean Video)
-APPS_SCRIPT_HISTORY_PHOTO_STUDIO = "https://script.google.com/macros/s/your_apps_script_url/exec"
+# 2. Spreadsheet History Foto Studio (Tracking Draf Jam Baru & Antrean Video YouTube)
+WEBHOOK_HISTORY_FOTO_STUDIO = os.getenv(
+    "WEBHOOK_HISTORY_FOTO_STUDIO",
+    "https://script.google.com/macros/s/your_apps_script_url/exec"
+)
 
-# 3. Spreadsheet Slow Moving Items (Featured Items Reprice & Stock Tracking)
-FEATURED_WEB_APP_URL = "https://script.google.com/macros/s/your_apps_script_url/exec"
+# 3. Spreadsheet Slow Moving Items (Barang Featured Blogspot Reprice & Stock)
+WEBHOOK_SLOW_MOVING_FEATURED = os.getenv(
+    "WEBHOOK_SLOW_MOVING_FEATURED",
+    "https://script.google.com/macros/s/your_apps_script_url/exec"
+)
 
 # Daftar Merek IDWX (gabungan dari semua script)
 DAFTAR_MEREK_IDWX = {
@@ -978,7 +984,7 @@ def update_history_foto_studio_status(sku, status="Publish"):
             "sku": sku,
             "status": status
         }
-        res = requests.post(APPS_SCRIPT_HISTORY_PHOTO_STUDIO, json=payload, timeout=30)
+        res = requests.post(WEBHOOK_HISTORY_FOTO_STUDIO, json=payload, timeout=30)
         if res.status_code == 200:
             try:
                 res_data = res.json()
@@ -1172,7 +1178,7 @@ def process_photo_studio(blogger_service, urls):
                             "description": display_title_no_year.upper(), "year": year, "condition": condition.upper(),
                             "price": price, "reference": reference, "serial_number": sku_pencarian, "link": url
                         }
-                        res_feat = requests.post(FEATURED_WEB_APP_URL, json=payload_featured, timeout=30)
+                        res_feat = requests.post(WEBHOOK_SLOW_MOVING_FEATURED, json=payload_featured, timeout=30)
                         try:
                             res_feat_data = res_feat.json()
                             if res_feat.status_code == 200 and res_feat_data.get("status") == "success": print(f"   📊 Berhasil! {res_feat_data.get('message')}")
@@ -1180,7 +1186,7 @@ def process_photo_studio(blogger_service, urls):
                         except: pass
                     except Exception as e: print(f"   ⚠️ Error Webhook Featured Sheets: {e}")
 
-                # 2. Kirim ke Webhook Google Sheets Consignment Listing Photo Studio
+                # 2. Kirim ke Webhook Google Sheets Consignment Listing (Tab PHOTO STUDIO)
                 if is_consign_item:
                     print(f"   📝 Item Consign. Update SKU Asli '{sku_pencarian}' di Webhook Consignment Listing (Photo Studio)...")
                     try:
@@ -1192,7 +1198,7 @@ def process_photo_studio(blogger_service, urls):
                             "photo_url": first_image_url,
                             "status": "Publish"
                         }
-                        requests.post(Consignment_Listing_Photo_Studio, json=payload_sheets_lama, timeout=30)
+                        requests.post(WEBHOOK_CONSIGNMENT_LISTING, json=payload_sheets_lama, timeout=30)
                         print(f"   ✅ Apps Script Consignment Listing (Photo Studio) terkirim untuk SKU {sku_pencarian}!")
                     except Exception as e:
                         print(f"   ⚠️ Error Webhook Sheets Consignment Photo Studio: {e}")
@@ -1397,7 +1403,7 @@ def process_photo_owner(blogger_service, urls):
                 try:
                     sku_pencarian = base_sku if 'base_sku' in locals() and base_sku else sku
                     payload_ke_gsheets = {"action": "check_web_owner", "sku": sku_pencarian}
-                    app_res = requests.post(Consignment_Listing_Photo_Owner, json=payload_ke_gsheets, timeout=30)
+                    app_res = requests.post(WEBHOOK_CONSIGNMENT_LISTING, json=payload_ke_gsheets, timeout=30)
 
                     if app_res.status_code == 200:
                         try:

@@ -45,13 +45,13 @@ SHOPIFY_CLIENT_ID = os.getenv("SHOPIFY_CLIENT_ID", "")
 SHOPIFY_CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET", "")
 API_VERSION = "2025-01"
 
-# Webhooks Google Apps Script
-# 1. Spreadsheet History Foto Studio (Pencatatan Jam Baru / Draft WA)
-APPS_SCRIPT_HISTORY_URL = os.getenv("APPS_SCRIPT_HISTORY_URL", "https://script.google.com/macros/s/your_apps_script_url/exec")
-# 2. Spreadsheet Consignment Listing Photo Studio (Reprice Tracking)
-APPS_SCRIPT_CONSIGNMENT_URL = os.getenv("APPS_SCRIPT_CONSIGNMENT_URL", "https://script.google.com/macros/s/your_apps_script_url/exec")
+# Webhooks Google Apps Script (3 Spreadsheet Target)
+# 1. Spreadsheet Consignment Listing (Tab 'PHOTO STUDIO' & 'PHOTO OWNER')
+APPS_SCRIPT_CONSIGNMENT_URL = os.getenv("WEBHOOK_CONSIGNMENT_LISTING", os.getenv("APPS_SCRIPT_CONSIGNMENT_URL", "https://script.google.com/macros/s/your_apps_script_url/exec"))
+# 2. Spreadsheet History Foto Studio (Pencatatan Jam Baru / Draft WA)
+APPS_SCRIPT_HISTORY_URL = os.getenv("WEBHOOK_HISTORY_FOTO_STUDIO", os.getenv("APPS_SCRIPT_HISTORY_URL", "https://script.google.com/macros/s/your_apps_script_url/exec"))
 # 3. Spreadsheet Slow Moving Items (Featured Items Reprice & Stock Tracking)
-APPS_SCRIPT_SLOW_MOVING_URL = os.getenv("APPS_SCRIPT_SLOW_MOVING_URL", "https://script.google.com/macros/s/your_apps_script_url/exec")
+APPS_SCRIPT_SLOW_MOVING_URL = os.getenv("WEBHOOK_SLOW_MOVING_FEATURED", os.getenv("APPS_SCRIPT_SLOW_MOVING_URL", "https://script.google.com/macros/s/your_apps_script_url/exec"))
 
 # Green-API (WhatsApp Bot)
 GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "")
