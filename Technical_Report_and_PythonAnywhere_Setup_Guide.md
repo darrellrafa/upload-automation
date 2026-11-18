@@ -312,9 +312,9 @@ GREEN_API_API_TOKEN="your_green_api_api_token"
 TARGET_GROUP_ID="your_target_whatsapp_group_id"
 
 # Google Apps Script Webhooks (3 Target Spreadsheets)
-WEBHOOK_CONSIGNMENT_LISTING="https://script.google.com/macros/s/your_consignment_script_id/exec"
-WEBHOOK_HISTORY_FOTO_STUDIO="https://script.google.com/macros/s/your_history_script_id/exec"
-WEBHOOK_SLOW_MOVING_FEATURED="https://script.google.com/macros/s/your_slow_moving_script_id/exec"
+WEBHOOK_CONSIGNMENT_LISTING="https://script.google.com/macros/s/your_apps_script_url/exec"
+WEBHOOK_HISTORY_FOTO_STUDIO="https://script.google.com/macros/s/your_apps_script_url/exec"
+WEBHOOK_SLOW_MOVING_FEATURED="https://script.google.com/macros/s/your_apps_script_url/exec"
 
 # YouTube BGM Library Folder on Google Drive
 DRIVE_AUDIO_FOLDER_ID="your_drive_audio_folder_id"
