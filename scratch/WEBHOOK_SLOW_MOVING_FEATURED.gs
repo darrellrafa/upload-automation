@@ -10,9 +10,12 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
 
     // =========================================================================
-    // JALUR 1: REPRICE / HARGA BARU (Khusus Item FEATURED dari Bot WA)
+    // JALUR 1: REPRICE, HARGA BARU, ATAU UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
     // =========================================================================
-    if (data.action === "reprice_slow_moving" || data.action === "reprice_featured") {
+    var isRepriceAction = (data.action === "reprice_slow_moving" || data.action === "reprice_featured");
+    var isStatusAction = (data.action === "update_status_slow_moving" || data.action === "status_slow_moving" || data.action === "takedown_slow_moving" || data.action === "sold_slow_moving");
+
+    if (isRepriceAction || isStatusAction) {
       var ss = SpreadsheetApp.getActiveSpreadsheet();
 
       // Prioritas pencarian: Cek tab "ALL STOCK" terlebih dahulu, lalu "NEW ARRIVAL"
@@ -57,6 +60,7 @@ function doPost(e) {
       var matchedBrand = "";
       var matchedDesc = "";
       var oldPriceVal = "";
+      var oldStatusVal = "";
       var colPriceIndex = 9;   // Default Kolom I (PRICE)
       var colStatusIndex = 2;  // Default Kolom B (STATUS)
       var hasStatusCol = false;
@@ -92,14 +96,14 @@ function doPost(e) {
           }
         }
 
-        // Loop data dari baris ke-2 (lewati header)
-        for (var r = 1; r < sheetValues.length; r++) {
+        // Loop data dari baris terakhir ke atas agar mencocokkan listing paling mutakhir
+        for (var r = sheetValues.length - 1; r >= 1; r--) {
           var rowData = sheetValues[r];
           var statusCell = foundStatus ? (rowData[colStatus - 1] || "").toString().trim().toUpperCase() : "";
           var serialCell = (rowData[colSerial - 1] || "").toString().trim().toUpperCase();
 
-          // Lewati jika status SOLD
-          if (statusCell === "SOLD") continue;
+          // Jika aksi adalah REPRICE, lewati yang statusnya sudah SOLD
+          if (isRepriceAction && statusCell === "SOLD") continue;
 
           var isMatch = false;
           if (serialCell) {
@@ -143,6 +147,7 @@ function doPost(e) {
             matchedBrand = (rowData[colBrand - 1] || rowData[2] || "").toString().trim();
             matchedDesc = (rowData[colDesc - 1] || rowData[3] || "").toString().trim();
             oldPriceVal = (rowData[colPrice - 1] || "").toString().trim();
+            oldStatusVal = statusCell;
             colPriceIndex = colPrice;
             colStatusIndex = colStatus;
             hasStatusCol = foundStatus;
@@ -151,28 +156,39 @@ function doPost(e) {
         }
 
         if (foundRow !== -1) {
-          break; // Stop jika sudah ketemu
+          break; // Stop jika sudah ketemu di tab pertama
         }
       }
 
       if (foundRow === -1) {
         return ContentService.createTextOutput(JSON.stringify({
           "status": "not_found",
-          "message": "SKU '" + data.sku + "' tidak ditemukan di tab ALL STOCK maupun NEW ARRIVAL (atau berstatus SOLD)"
+          "message": "SKU '" + data.sku + "' tidak ditemukan di tab ALL STOCK maupun NEW ARRIVAL" + (isRepriceAction ? " (atau berstatus SOLD)" : "")
         })).setMimeType(ContentService.MimeType.JSON);
       }
 
-      // 1. Update Harga Baru di Kolom PRICE
-      foundSheet.getRange(foundRow, colPriceIndex).setValue(numericPrice);
-      foundSheet.getRange(foundRow, colPriceIndex).setNumberFormat("#,##0");
+      var newStatusApplied = oldStatusVal;
 
-      // 2. Update Status menjadi 'REPRICE' (jika ada kolom STATUS dan perintah REPRICE)
-      if (hasStatusCol && data.command_type === "REPRICE") {
-        foundSheet.getRange(foundRow, colStatusIndex).setValue("REPRICE");
+      // 1. Eksekusi jika Aksi REPRICE / HARGA BARU
+      if (isRepriceAction) {
+        foundSheet.getRange(foundRow, colPriceIndex).setValue(numericPrice);
+        foundSheet.getRange(foundRow, colPriceIndex).setNumberFormat("#,##0");
+
+        if (hasStatusCol && data.command_type === "REPRICE") {
+          newStatusApplied = "REPRICE";
+          foundSheet.getRange(foundRow, colStatusIndex).setValue(newStatusApplied);
+        }
+      }
+
+      // 2. Eksekusi jika Aksi UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
+      if (isStatusAction && hasStatusCol) {
+        newStatusApplied = (data.status_text || "SOLD").toString().trim().toUpperCase();
+        foundSheet.getRange(foundRow, colStatusIndex).setValue(newStatusApplied);
       }
 
       return ContentService.createTextOutput(JSON.stringify({
         "status": "success",
+        "action": data.action,
         "tab_name": foundSheet.getName(),
         "row": foundRow,
         "sku": matchedCellSku,
@@ -180,6 +196,8 @@ function doPost(e) {
         "description": matchedDesc,
         "old_price": oldPriceVal,
         "new_price": numericPrice,
+        "old_status": oldStatusVal,
+        "new_status": newStatusApplied,
         "formatted_price": data.formatted_price
       })).setMimeType(ContentService.MimeType.JSON);
     }
@@ -212,6 +230,7 @@ function doPost(e) {
     var rowData = new Array(headers.length);
     var hasMappedHeader = false;
     var priceColIndex = -1;
+    var serialColIndex = -1;
 
     for (var h = 0; h < headers.length; h++) {
       var headerText = (headers[h] || "").toString().trim().toUpperCase();
@@ -245,6 +264,7 @@ function doPost(e) {
         hasMappedHeader = true;
       } else if (headerText === "SERIAL NUMBER" || headerText === "SERIAL" || headerText === "SKU") {
         rowData[h] = data.serial_number || "";
+        serialColIndex = h + 1;
         hasMappedHeader = true;
       } else if (headerText === "LINK WEBSITE" || headerText === "LINK" || headerText === "URL") {
         rowData[h] = data.link || "";
@@ -269,9 +289,10 @@ function doPost(e) {
         data.link                               // J: LINK WEBSITE
       ];
       priceColIndex = 7;
+      serialColIndex = 9;
     }
     
-    // Cari baris terakhir yang terisi (cepat & efisien tanpa scan sel kosong)
+    // Cari baris terakhir yang terisi
     var lastRow = sheet.getLastRow();
     var insertRow = lastRow + 1;
     if (lastRow > 1) {
@@ -286,13 +307,29 @@ function doPost(e) {
         }
       }
     }
+
+    // Cek proteksi duplikasi: Jika serial_number sudah pernah ada di sheet dan aktif, update baris tersebut
+    var existingRow = -1;
+    var searchSerial = (data.serial_number || "").toString().trim().toUpperCase();
+    if (searchSerial && serialColIndex > 0 && lastRow > 1) {
+      var serialList = sheet.getRange(1, serialColIndex, lastRow, 1).getValues();
+      for (var sRow = serialList.length - 1; sRow >= 1; sRow--) {
+        if ((serialList[sRow][0] || "").toString().trim().toUpperCase() === searchSerial) {
+          existingRow = sRow + 1;
+          break;
+        }
+      }
+    }
+
+    var targetRow = (existingRow > 0) ? existingRow : insertRow;
+    var actionMessage = (existingRow > 0) ? ("Diperbarui di baris " + targetRow) : ("Tersimpan rapi di baris " + targetRow);
     
-    // Copy Format & Dropdown dari baris di atasnya
-    if (insertRow > 2) {
-      var prevRow = insertRow - 1;
+    // Copy Format & Dropdown dari baris di atasnya (hanya jika baris baru)
+    if (existingRow <= 0 && targetRow > 2) {
+      var prevRow = targetRow - 1;
       var numColsToCopy = Math.min(sheet.getLastColumn(), rowData.length);
       var rangeToCopy = sheet.getRange(prevRow, 1, 1, numColsToCopy);
-      var targetRange = sheet.getRange(insertRow, 1, 1, numColsToCopy);
+      var targetRange = sheet.getRange(targetRow, 1, 1, numColsToCopy);
       
       try {
         rangeToCopy.copyTo(targetRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
@@ -302,19 +339,20 @@ function doPost(e) {
       }
     }
     
-    // Masukkan data baru
-    sheet.getRange(insertRow, 1, 1, rowData.length).setValues([rowData]);
+    // Masukkan / Perbarui data
+    sheet.getRange(targetRow, 1, 1, rowData.length).setValues([rowData]);
 
     // Format kolom PRICE dengan format pemisah ribuan (#,##0)
     if (priceColIndex > 0 && numericPriceInput > 0) {
-      sheet.getRange(insertRow, priceColIndex).setNumberFormat("#,##0");
+      sheet.getRange(targetRow, priceColIndex).setNumberFormat("#,##0");
     }
     
     return ContentService.createTextOutput(JSON.stringify({
       "status": "success", 
-      "message": "Tersimpan rapi di baris " + insertRow + " (Tab " + targetTabName + ")",
+      "message": actionMessage + " (Tab " + targetTabName + ")",
       "tab_name": targetTabName,
-      "row": insertRow
+      "row": targetRow,
+      "is_updated": (existingRow > 0)
     })).setMimeType(ContentService.MimeType.JSON);
       
   } catch (error) {

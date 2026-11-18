@@ -2052,6 +2052,40 @@ def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, 
         print(f"⚠️ Error Webhook Sheets Slow Moving: {e}")
         return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
 
+def update_slow_moving_status_sheet(sku, status_text, canonical_sku=None):
+    """
+    Mengirim perintah update status (SOLD, ON HOLD, TAKEDOWN) ke Google Apps Script
+    Spreadsheet 'Stock List Slow Moving Items' (Tab 'ALL STOCK' / 'NEW ARRIVAL').
+    Kriteria:
+    - Hanya jika produk memiliki label FEATURED di Blogspot.
+    - Mengubah kolom STATUS menjadi status_text (misal 'SOLD', 'ON HOLD', 'TAKEDOWN').
+    """
+    clean_status = (status_text or "").strip().upper()
+    if clean_status in ["HOLD", "ON HOLD", "ONHOLD"]:
+        clean_status = "ON HOLD"
+    elif clean_status in ["TAKE", "TAKEDOWN"]:
+        clean_status = "TAKEDOWN"
+    elif clean_status in ["SOLD"]:
+        clean_status = "SOLD"
+
+    payload = {
+        "action": "update_status_slow_moving",
+        "sku": sku,
+        "canonical_sku": canonical_sku,
+        "status_text": clean_status
+    }
+    try:
+        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=60)
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {"status": "error", "message": f"HTTP status {res.status_code}"}
+    except requests.exceptions.Timeout:
+        return {"status": "error", "message": "Google Sheets Slow Moving timeout (>60s). Sedang diproses di background."}
+    except Exception as e:
+        print(f"⚠️ Error Webhook Sheets Slow Moving Status: {e}")
+        return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
+
 # ==============================================================================
 # 6. ROUTE ENDPOINTS
 # ==============================================================================
@@ -2252,6 +2286,7 @@ def wa_webhook():
             post_description = ""
             is_consign_ps = False
             is_consign_po = False
+            is_featured = False
             if service:
                 post = find_blogger_post_by_code(service, sku)
                 if post:
@@ -2260,6 +2295,7 @@ def wa_webhook():
                     post_labels = post.get("labels", [])
                     is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
                     is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
+                    is_featured = any("FEATURED" in l.upper() for l in post_labels)
                     if photo_url:
                         print(f"📸 Ditemukan foto jam tangan dari Blogspot: {photo_url}")
                     if post_description:
@@ -2354,6 +2390,7 @@ def wa_webhook():
             canonical_sku = (extract_sku_from_blogger_post(post)[0] if post else None) or shopify_res.get("matched_sku") or clean_sku_string(sku)
             sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
             sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
+            sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
 
             if is_consign_ps:
                 print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO) status ke '{status_text}'...")
@@ -2362,7 +2399,11 @@ def wa_webhook():
                 print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER) status ke '{status_text}'...")
                 sheet_consign_po_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
             else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO. Update spreadsheet dilewati.")
+                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO.")
+
+            if is_featured:
+                print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL) status ke '{status_text}'...")
+                sheet_slow_moving_res = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
 
             # 4. Kirim Balasan Laporan Lengkap ke WhatsApp (beserta foto jika ada)
             status_shop_icon = "✅" if shopify_res.get("status") == "success" else "⚠️"
@@ -2408,8 +2449,17 @@ def wa_webhook():
                     pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_po_res.get('row', '-')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
-            else:
-                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / PO)\n"
+
+            if is_featured:
+                status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
+                pesan_konfirmasi += f"{status_slow_icon} *Spreadsheet (Slow Moving):* "
+                if sheet_slow_moving_res.get("status") == "success":
+                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_slow_moving_res.get('row', '-')}, Tab {sheet_slow_moving_res.get('tab_name', '-')})\n"
+                else:
+                    pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
+
+            if not is_consign_ps and not is_consign_po and not is_featured:
+                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / PO / FEATURED)\n"
 
             if post_description:
                 pesan_konfirmasi += f"\n━━━━━━━━━━━━━━━━━━\n{post_description}\n"
@@ -2440,7 +2490,8 @@ def wa_webhook():
                 "shopify": shopify_res,
                 "blogger": blogger_res,
                 "spreadsheet_consignment_ps": sheet_consign_ps_res,
-                "spreadsheet_consignment_po": sheet_consign_po_res
+                "spreadsheet_consignment_po": sheet_consign_po_res,
+                "spreadsheet_slow_moving": sheet_slow_moving_res
             }), 200
 
         # ======================================================================
@@ -2527,7 +2578,8 @@ def wa_webhook():
                 "sku": sku,
                 "blogger": blogger_res,
                 "spreadsheet_consignment_ps": sheet_consign_ps_res,
-                "spreadsheet_consignment_po": sheet_consign_po_res
+                "spreadsheet_consignment_po": sheet_consign_po_res,
+                "spreadsheet_slow_moving": sheet_slow_moving_res
             }), 200
 
         # ======================================================================
