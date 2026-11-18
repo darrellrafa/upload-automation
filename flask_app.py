@@ -2,6 +2,8 @@ import os
 import re
 import json
 import time
+import html
+from html.parser import HTMLParser
 from collections import OrderedDict
 import requests
 from datetime import datetime, timezone, timedelta
@@ -14,6 +16,93 @@ app = Flask(__name__)
 
 # Zona Waktu Indonesia Barat (WIB)
 WIB = timezone(timedelta(hours=7))
+
+# ==============================================================================
+# DAFTAR MEREK JAM MEWAH & HELPER DETEKSI KONFLIK MEREK (SAFETY GUARD)
+# ==============================================================================
+LUXURY_WATCH_BRANDS = [
+    ("ROLEX", ["ROLEX"]),
+    ("PATEK PHILIPPE", ["PATEK PHILIPPE", "PATEK", "NAUTILUS", "AQUANAUT", "CALATRAVA"]),
+    ("AUDEMARS PIGUET", ["AUDEMARS PIGUET", "AUDEMARS", "ROYAL OAK", "OFFSHORE"]),
+    ("HUBLOT", ["HUBLOT", "BIG BANG", "CLASSIC FUSION", "KING POWER"]),
+    ("FRANCK MULLER", ["FRANCK MULLER", "FRANCK", "MULLER", "CONQUISTADOR", "VANGUARD", "CASABLANCA", "CRAZY HOURS", "CURVEX"]),
+    ("RICHARD MILLE", ["RICHARD MILLE", "MILLE"]),
+    ("OMEGA", ["OMEGA", "SPEEDMASTER", "SEAMASTER", "CONSTELLATION", "DE VILLE"]),
+    ("TUDOR", ["TUDOR", "BLACK BAY", "PELAGOS"]),
+    ("CARTIER", ["CARTIER", "SANTOS", "TANK", "BALLON BLEU", "PANTHERE", "PASHA"]),
+    ("IWC", ["IWC", "SCHAFFHAUSEN", "PORTUGIESER", "PILOT", "PORTOFINO", "INGENIEUR", "BIG PILOT"]),
+    ("PANERAI", ["PANERAI", "LUMINOR", "RADIOMIR", "SUBMERSIBLE"]),
+    ("BREITLING", ["BREITLING", "NAVITIMER", "CHRONOMAT", "SUPEROCEAN", "AVENGER"]),
+    ("TAG HEUER", ["TAG HEUER", "TAG", "CARRERA", "MONACO", "AQUARACER", "AUTAVIA"]),
+    ("JAEGER-LECOULTRE", ["JAEGER-LECOULTRE", "JAEGER LECOULTRE", "JLC", "REVERSO", "POLARIS", "MASTER CONTROL"]),
+    ("VACHERON CONSTANTIN", ["VACHERON CONSTANTIN", "VACHERON", "OVERSEAS", "HISTORIQUES"]),
+    ("CHOPARD", ["CHOPARD", "MILLE MIGLIA", "HAPPY DIAMONDS", "ALPINE EAGLE"]),
+    ("BULGARI", ["BULGARI", "BVLGARI", "OCTO", "OCTO FINISSIMO", "SERPENTI"]),
+    ("ZENITH", ["ZENITH", "CHRONOMASTER", "DEFY", "EL PRIMERO"]),
+    ("GIRARD-PERREGAUX", ["GIRARD-PERREGAUX", "GIRARD PERREGAUX", "GP", "LAUREATO"]),
+    ("BLANCPAIN", ["BLANCPAIN", "FIFTY FATHOMS", "VILLERET"]),
+    ("BELL & ROSS", ["BELL & ROSS", "BELL AND ROSS", "INSTRUMENTS"]),
+    ("SEIKO", ["GRAND SEIKO", "SEIKO"])
+]
+
+class HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.result = []
+    def handle_data(self, d):
+        self.result.append(d)
+    def handle_starttag(self, tag, attrs):
+        if tag in ['br', 'p', 'div', 'tr', 'li', 'h1', 'h2', 'h3', 'h4']:
+            self.result.append('\n')
+    def handle_endtag(self, tag):
+        if tag in ['p', 'div', 'tr', 'li']:
+            self.result.append('\n')
+    def get_text(self):
+        return "".join(self.result)
+
+def strip_html_to_text(html_content):
+    """Mengubah format HTML menjadi plain text bersih baris per baris tanpa tag."""
+    if not html_content:
+        return ""
+    try:
+        parser = HTMLTextExtractor()
+        parser.feed(html_content)
+        raw_text = parser.get_text()
+    except Exception:
+        raw_text = re.sub(r'<[^>]+>', ' ', html_content)
+    return html.unescape(raw_text)
+
+def detect_watch_brand(title):
+    """Mendeteksi merek jam tangan mewah berdasarkan teks judul."""
+    if not title:
+        return None
+    upper_title = re.sub(r'\[.*?\]', '', title).upper()
+    upper_title = re.sub(r'[^A-Z0-9\s]', ' ', upper_title)
+    words = upper_title.split()
+
+    for canonical_brand, keywords in LUXURY_WATCH_BRANDS:
+        for kw in keywords:
+            kw_words = kw.split()
+            if len(kw_words) == 1:
+                if kw in words:
+                    return canonical_brand
+            else:
+                if kw in upper_title:
+                    return canonical_brand
+    return None
+
+def is_brand_conflict(title_a, title_b):
+    """
+    Memeriksa apakah ada kontradiksi merek jam tangan yang berlainan antara dua judul.
+    Contoh: Hublot vs Franck Muller -> Conflict! (True, 'HUBLOT', 'FRANCK MULLER')
+    """
+    if not title_a or not title_b:
+        return False, None, None
+    brand_a = detect_watch_brand(title_a)
+    brand_b = detect_watch_brand(title_b)
+    if brand_a and brand_b and brand_a != brand_b:
+        return True, brand_a, brand_b
+    return False, brand_a, brand_b
 
 # ==============================================================================
 # 1. LOAD ENVIRONMENT VARIABLES (.env)
@@ -850,6 +939,84 @@ def clean_sku_string(sku_str):
     cleaned = cleaned.replace('\n', ' ').replace('\r', ' ')
     return cleaned.strip(" \t\n\r.,-:")
 
+def extract_post_sku_details(post):
+    """
+    Mengekstrak rincian kode/SKU dan nomor referensi dari postingan Blogspot.
+    Mengembalikan dict:
+    - shopify_sku: dari 'SKU Shopify: ...'
+    - base_sku: dari 'Code: ...'
+    - owner: dari 'Code: ... (owner)'
+    - resolved_sku: shopify_sku if shopify_sku else base_sku
+    - ref_number: dari 'Ref. ...' (untuk safety guard anti-collision)
+    - title: judul postingan
+    - content: isi HTML postingan
+    """
+    if not post:
+        return {"shopify_sku": None, "base_sku": None, "owner": None, "resolved_sku": None, "ref_number": None, "title": "", "content": ""}
+    content = post.get("content", "")
+    title = post.get("title", "")
+
+    shopify_sku = None
+    base_sku = None
+    owner = None
+    ref_number = None
+
+    # 1. Regex langsung pada HTML
+    m_shop = re.search(r'SKU\s*Shopify\s*:\s*(?:<[^>]+>|\s|&nbsp;)*([\w\-\/\.]+)', content, re.IGNORECASE)
+    if m_shop:
+        shopify_sku = m_shop.group(1).strip()
+
+    m_code = re.search(r'(?:\b|>)Code\s*:\s*(?:<[^>]+>|\s|&nbsp;)*([\w\-\/\.]+)', content, re.IGNORECASE)
+    if m_code:
+        base_sku = m_code.group(1).strip()
+
+    m_owner = re.search(r'(?:\b|>)Code\s*:\s*(?:<[^>]+>|\s|&nbsp;)*[\w\-\/\.]+(?:<[^>]+>|\s|&nbsp;)*\((.*?)\)', content, re.IGNORECASE)
+    if m_owner:
+        owner = m_owner.group(1).strip()
+
+    m_ref = re.search(r'(?:\b|>)Ref\.?\s*:\s*(?:<[^>]+>|\s|&nbsp;)*([\w\-\/\.]+)', content, re.IGNORECASE)
+    if not m_ref:
+        m_ref = re.search(r'(?:\b|>)Ref\b\s*(?:<[^>]+>|\s|&nbsp;)*\.?\s*([\w\-\/\.]+)', content, re.IGNORECASE)
+    if m_ref:
+        ref_number = m_ref.group(1).strip()
+
+    # 2. Fallback via strip_html_to_text
+    if not shopify_sku or not base_sku or not ref_number:
+        try:
+            text = strip_html_to_text(content)
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            for line in lines:
+                if not shopify_sku:
+                    sm = re.search(r'^SKU\s*Shopify\s*:\s*([\w\-\/\.]+)', line, re.IGNORECASE)
+                    if sm:
+                        shopify_sku = sm.group(1).strip()
+                if not base_sku:
+                    cm = re.search(r'^Code\s*:\s*([\w\-\/\.]+)', line, re.IGNORECASE)
+                    if cm:
+                        base_sku = cm.group(1).strip()
+                        om = re.search(r'\((.*?)\)', line)
+                        if om and not owner:
+                            owner = om.group(1).strip()
+                if not ref_number:
+                    rm = re.search(r'^Ref\.?\s*:\s*([\w\-\/\.]+)', line, re.IGNORECASE)
+                    if not rm:
+                        rm = re.search(r'^Ref\b\s*\.?\s*([\w\-\/\.]+)', line, re.IGNORECASE)
+                    if rm:
+                        ref_number = rm.group(1).strip()
+        except Exception:
+            pass
+
+    resolved_sku = shopify_sku if shopify_sku else base_sku
+    return {
+        "shopify_sku": shopify_sku,
+        "base_sku": base_sku,
+        "owner": owner,
+        "resolved_sku": resolved_sku,
+        "ref_number": ref_number,
+        "title": title,
+        "content": content
+    }
+
 def extract_sku_from_blogger_post(post):
     """
     Mengekstrak SKU dan nama owner dari isi postingan Blogspot jika ada.
@@ -857,30 +1024,87 @@ def extract_sku_from_blogger_post(post):
     """
     if not post:
         return None, None
-    content = post.get("content", "")
+    details = extract_post_sku_details(post)
+    return details.get("resolved_sku"), details.get("owner")
 
-    # Cek apakah ada catatan spesifik SKU Shopify (misal varian counter seperti 8180D7F9-1)
-    shopify_sku_match = re.search(r'SKU\s*Shopify\s*:\s*(?:<[^>]+>)*\s*([\w\-\/]+)', content, re.IGNORECASE)
-    if not shopify_sku_match:
-        shopify_sku_match = re.search(r'SKU\s*Shopify:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
-    shopify_sku = shopify_sku_match.group(1).strip() if shopify_sku_match else None
+def check_blogger_post_sku_match(post_details, target_sku):
+    """
+    Memeriksa apakah postingan Blogger BENAR-BENAR memiliki Code atau SKU Shopify yang cocok dengan target_sku.
+    Mengembalikan (is_match: bool, score: int, matched_via: str).
+    JIKA target_sku hanya cocok sebagai nomor referensi jam tangan (misal '703' di 'Ref. 703.OM...'):
+    MUTLAK DITOLAK demi mencegah false takedown!
+    """
+    if not post_details or not target_sku:
+        return False, 0, ""
 
-    # Base SKU dari baris Code
-    sku_match = re.search(r'Code\s*:\s*(?:<[^>]+>)*\s*([\w\-\/]+)', content, re.IGNORECASE)
-    if not sku_match:
-        sku_match = re.search(r'Code:(?:&nbsp;|\s)*([\w\-\/]+)', content, re.IGNORECASE)
-    base_sku = sku_match.group(1).strip() if sku_match else None
+    clean_target = clean_sku_string(target_sku).upper()
+    base_target = re.sub(r'-\d+$', '', clean_target).upper()
 
-    owner_match = re.search(r'Code\s*:\s*(?:<[^>]+>)*\s*[\w\-\/]+(?:<[^>]+>)*\s*\((.*?)\)', content, re.IGNORECASE)
-    if not owner_match:
-        owner_match = re.search(r'Code:(?:&nbsp;|\s)*[\w\-\/]+(?:&nbsp;|\s)*\((.*?)\)', content, re.IGNORECASE)
-    owner = owner_match.group(1).strip() if owner_match else None
+    shopify_sku = (post_details.get("shopify_sku") or "").strip().upper()
+    base_sku = (post_details.get("base_sku") or "").strip().upper()
+    resolved_sku = (post_details.get("resolved_sku") or "").strip().upper()
+    ref_number = (post_details.get("ref_number") or "").strip().upper()
 
-    # Prioritaskan SKU Shopify jika ada, jika tidak ada gunakan base SKU dari Code
-    resolved_sku = shopify_sku if shopify_sku else base_sku
-    return resolved_sku, owner
+    # Kumpulkan semua kandidat SKU resmi dari postingan
+    post_skus = []
+    if shopify_sku:
+        post_skus.append((shopify_sku, "shopify_sku", 100))
+    if base_sku and base_sku != shopify_sku:
+        post_skus.append((base_sku, "base_sku", 90))
+    if resolved_sku and resolved_sku not in [shopify_sku, base_sku]:
+        post_skus.append((resolved_sku, "resolved_sku", 85))
 
-def find_blogger_post_by_code(service, code, include_drafts=True):
+    best_match = False
+    best_score = 0
+    best_via = ""
+
+    for p_sku, sku_type, base_weight in post_skus:
+        p_base = re.sub(r'-\d+$', '', p_sku)
+
+        # 1. Exact Match pada Code / SKU Shopify
+        if p_sku == clean_target:
+            score = base_weight + 50
+            if score > best_score:
+                best_match, best_score, best_via = True, score, f"exact_{sku_type}"
+
+        # 2. Base SKU Match (misal target 703 vs post 703-1 atau target 703-1 vs post 703)
+        elif p_base == base_target and base_target:
+            score = base_weight + 30
+            if score > best_score:
+                best_match, best_score, best_via = True, score, f"base_counter_{sku_type}"
+
+        # 3. Slash Part Match (misal serial movement/case)
+        elif "/" in p_sku or "/" in clean_target:
+            p_parts = [p.strip() for p in p_sku.split('/') if p.strip()]
+            t_parts = [p.strip() for p in clean_target.split('/') if p.strip()]
+            if any(tp in p_parts for tp in t_parts) or any(pp in t_parts for pp in p_parts):
+                score = base_weight + 20
+                if score > best_score:
+                    best_match, best_score, best_via = True, score, f"slash_part_{sku_type}"
+
+        # 4. Normalized Alphanumeric Match
+        elif re.sub(r'[^A-Z0-9]', '', p_sku) == re.sub(r'[^A-Z0-9]', '', clean_target) and len(clean_target) >= 3:
+            score = base_weight + 10
+            if score > best_score:
+                best_match, best_score, best_via = True, score, f"normalized_{sku_type}"
+
+    # REJECTION GUARD: Jika target_sku tidak cocok dengan SKU apa pun di atas,
+    # tapi ada substring match di ref_number (seperti '703' di '703.OM.6912.HR.FMC12'):
+    # Ini 100% false positive! MUTLAK DITOLAK!
+    if not best_match and ref_number and clean_target in ref_number:
+        return False, 0, f"rejected_ref_number_collision({ref_number})"
+
+    return best_match, best_score, best_via
+
+def find_blogger_post_by_code(service, code, include_drafts=True, expected_title=None):
+    """
+    Mencari postingan Blogspot berdasarkan SKU / Code dengan Multi-Candidate Filtering ketat:
+    1. Hanya menerima postingan yang Code atau SKU Shopify-nya benar-benar cocok.
+    2. Menolak kecocokan palsu dari Ref. Number, teks tahun, ukuran diameter, atau harga.
+    3. Memprioritaskan postingan yang merek/judulnya konsisten dengan expected_title (Shopify).
+    4. Menolak postingan yang benturan merek keras (misal Blogspot HUBLOT vs Shopify FRANCK MULLER).
+    5. Mengembalikan None jika tidak ada kandidat yang valid (tidak pernah return sembarang item).
+    """
     if not service or not BLOG_ID or not code:
         return None
     clean_code = clean_sku_string(code)
@@ -897,32 +1121,103 @@ def find_blogger_post_by_code(service, code, include_drafts=True):
     if code.strip() not in search_candidates:
         search_candidates.append(code.strip())
 
+    matched_candidates = []
+    seen_post_ids = set()
+
     # 1. Cari di postingan yang LIVE / Terbit
     for cand in search_candidates:
-        try:
-            res = service.posts().search(blogId=BLOG_ID, q=cand).execute()
-            items = res.get("items", [])
-            for item in items:
-                content = item.get("content", "")
-                title = item.get("title", "")
-                if cand.upper() in content.upper() or cand.upper() in title.upper():
-                    return item
-            if items:
-                return items[0]
-        except Exception as e:
-            print(f"⚠️ Error search Blogger post ({cand}): {e}")
+        search_queries = [cand]
+        if len(cand) <= 6:
+            search_queries.append(f'"{cand}"')
+            search_queries.append(f'Code: {cand}')
 
-    # 2. Fallback: Cari di postingan DRAFT (yang sudah dipindahkan ke Trash sebelumnya)
+        for q_str in search_queries:
+            try:
+                res = service.posts().search(blogId=BLOG_ID, q=q_str).execute()
+                items = res.get("items", [])
+                for item in items:
+                    p_id = item.get("id")
+                    if p_id in seen_post_ids:
+                        continue
+
+                    details = extract_post_sku_details(item)
+                    is_match, score, matched_via = check_blogger_post_sku_match(details, clean_code)
+                    if not is_match:
+                        continue
+
+                    # Evaluasi brand conflict jika expected_title diberikan
+                    item_title = item.get("title", "")
+                    if expected_title:
+                        conflict, b1, b2 = is_brand_conflict(item_title, expected_title)
+                        if conflict:
+                            print(f"⚠️ Melewati postingan '{item_title}' karena benturan merek ({b1} vs {b2}) dengan '{expected_title}'")
+                            continue
+
+                        # Bonus kesesuaian kata judul
+                        clean_item_t = re.sub(r'\[.*?\]', '', item_title).upper()
+                        clean_exp_t = re.sub(r'\[.*?\]', '', expected_title).upper()
+                        exp_words = [w for w in re.split(r'[^A-Z0-9]+', clean_exp_t) if len(w) >= 3]
+                        if exp_words:
+                            matched_words = [w for w in exp_words if w in clean_item_t]
+                            score += int((len(matched_words) / len(exp_words)) * 50)
+
+                    # Prioritas status LIVE
+                    if str(item.get("status", "LIVE")).upper() == "LIVE":
+                        score += 30
+
+                    seen_post_ids.add(p_id)
+                    matched_candidates.append({
+                        "item": item,
+                        "score": score,
+                        "matched_via": matched_via,
+                        "details": details
+                    })
+            except Exception as e:
+                print(f"⚠️ Error search Blogger post ({q_str}): {e}")
+
+        if matched_candidates:
+            break
+
+    if matched_candidates:
+        matched_candidates.sort(key=lambda x: x["score"], reverse=True)
+        best = matched_candidates[0]
+        print(f"✅ Ditemukan postingan Blogspot untuk SKU '{code}': '{best['item'].get('title')}' (Skor: {best['score']}, Via: {best['matched_via']})")
+        return best["item"]
+
+    # 2. Fallback: Cari di postingan DRAFT
     if include_drafts:
         try:
             draft_res = service.posts().list(blogId=BLOG_ID, status=['DRAFT'], maxResults=50).execute()
             draft_items = draft_res.get("items", [])
-            for cand in search_candidates:
-                for item in draft_items:
-                    content = item.get("content", "")
-                    title = item.get("title", "")
-                    if cand.upper() in content.upper() or cand.upper() in title.upper():
-                        return item
+            draft_candidates = []
+            for item in draft_items:
+                p_id = item.get("id")
+                if p_id in seen_post_ids:
+                    continue
+
+                details = extract_post_sku_details(item)
+                is_match, score, matched_via = check_blogger_post_sku_match(details, clean_code)
+                if not is_match:
+                    continue
+
+                item_title = item.get("title", "")
+                if expected_title:
+                    conflict, b1, b2 = is_brand_conflict(item_title, expected_title)
+                    if conflict:
+                        continue
+
+                draft_candidates.append({
+                    "item": item,
+                    "score": score,
+                    "matched_via": matched_via,
+                    "details": details
+                })
+
+            if draft_candidates:
+                draft_candidates.sort(key=lambda x: x["score"], reverse=True)
+                best_draft = draft_candidates[0]
+                print(f"ℹ️ Ditemukan postingan Blogspot DRAFT untuk SKU '{code}': '{best_draft['item'].get('title')}'")
+                return best_draft["item"]
         except Exception as e:
             print(f"⚠️ Error list Blogger drafts: {e}")
 
@@ -2159,7 +2454,11 @@ def wa_webhook():
 
             print(f"⚡ Menerima Perintah {cmd_type} untuk SKU: '{sku}' dengan harga: {formatted_price}")
 
-            # 1. Update Blogspot
+            # 1. Update Shopify (Multi-Level Smart Matching)
+            shopify_res = update_shopify_reprice(sku, cmd_type, numeric_price, blogger_post=None)
+            shopify_product_title = shopify_res.get("product_title", "")
+
+            # 2. Update Blogspot dengan Filter SKU Ketat & Validasi Merek
             blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
             is_consign_ps = False
             is_consign_po = False
@@ -2167,18 +2466,32 @@ def wa_webhook():
             service = get_blogger_service()
             post = None
             if service:
-                post = find_blogger_post_by_code(service, sku)
+                post = find_blogger_post_by_code(service, sku, expected_title=shopify_product_title)
                 if post:
-                    blogger_res = update_blogger_reprice(service, post, cmd_type, formatted_price)
+                    post_title = post.get("title", "")
+                    # Safety Guard: Benturan Merek
+                    if shopify_product_title:
+                        conflict, b_blog, b_shop = is_brand_conflict(post_title, shopify_product_title)
+                        if conflict:
+                            print(f"🚨 ALERT: Benturan merek terdeteksi! Blogspot '{b_blog}' vs Shopify '{b_shop}'. Membatalkan reprice Blogspot demi keamanan.")
+                            blogger_res = {
+                                "status": "mismatch_aborted",
+                                "post_title": post_title,
+                                "brand_blog": b_blog,
+                                "brand_shop": b_shop,
+                                "message": f"Dibatalkan otomatis demi keamanan: Merek Blogspot ({b_blog}) berbeda dengan Shopify ({b_shop})"
+                            }
+                        else:
+                            blogger_res = update_blogger_reprice(service, post, cmd_type, formatted_price)
+                    else:
+                        blogger_res = update_blogger_reprice(service, post, cmd_type, formatted_price)
+
                     post_labels = post.get("labels", [])
                     is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
                     is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
                     is_featured = any("FEATURED" in l.upper() for l in post_labels)
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
-
-            # 2. Update Shopify (dengan Multi-Level Smart Matching & Fallback Post Blogspot)
-            shopify_res = update_shopify_reprice(sku, cmd_type, numeric_price, blogger_post=post)
 
             # 3. Update Google Spreadsheet
             canonical_sku = shopify_res.get("matched_sku") or (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
@@ -2281,134 +2594,109 @@ def wa_webhook():
             cmd_title = cmd_type.replace("_", " ")
             print(f"🗑️ Menerima Perintah {cmd_type} (Status: {status_text}) untuk SKU: '{sku}' dari: {sender_name}")
 
+            # 1. Update Shopify: Status DRAFT & Stock 0
+            shopify_res = update_shopify_takedown(sku)
+            shopify_product_title = shopify_res.get("product_title", "")
+
+            # 2. Cari & Proses Postingan di Blogspot
             service = get_blogger_service()
             post = None
+            blogger_res = {"status": "skipped", "message": "Blogger service tidak aktif"}
             photo_url = None
             post_description = ""
             is_consign_ps = False
             is_consign_po = False
             is_featured = False
+
             if service:
-                post = find_blogger_post_by_code(service, sku)
+                # Cari postingan dengan filter SKU ketat & verifikasi expected_title
+                post = find_blogger_post_by_code(service, sku, expected_title=shopify_product_title)
                 if post:
+                    post_title = post.get("title", "")
                     photo_url = extract_first_image_from_post(post)
                     post_description = extract_takedown_description_from_post(post)
                     post_labels = post.get("labels", [])
                     is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
                     is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
                     is_featured = any("FEATURED" in l.upper() for l in post_labels)
-                    if photo_url:
-                        print(f"📸 Ditemukan foto jam tangan dari Blogspot: {photo_url}")
-                    if post_description:
-                        print(f"📝 Ditemukan deskripsi jam tangan dari Blogspot ({len(post_description.splitlines())} baris)")
 
-            # KONDISI KHUSUS: Postingan Blogspot sudah tidak ada (misal barang sebelumnya ON HOLD lalu diubah jadi SOLD)
-            # Karena di Blogspot & Shopify sudah tidak aktif, tugasnya HANYA merubah status pada spreadsheet (PHOTO STUDIO / PHOTO OWNER).
-            if not post:
-                print(f"ℹ️ Postingan Blogspot untuk SKU '{sku}' tidak ditemukan (sudah dihapus/On Hold sebelumnya).")
-                print(f"📊 Menjalankan update status ke Google Spreadsheet Consignment...")
-
-                # Tentukan tab awal: jika SKU diawali 'CPO' maka PHOTO OWNER, selain itu PHOTO STUDIO
-                target_sheet = "PHOTO OWNER" if sku.upper().startswith("CPO") else "PHOTO STUDIO"
-                sheet_res = update_consignment_status_sheet(sku, status_text, sheet_name=target_sheet)
-
-                # Jika tidak ditemukan di target_sheet pertama, coba cek tab lainnya (PHOTO STUDIO <-> PHOTO OWNER)
-                if sheet_res.get("status") != "success":
-                    alt_sheet = "PHOTO STUDIO" if target_sheet == "PHOTO OWNER" else "PHOTO OWNER"
-                    alt_res = update_consignment_status_sheet(sku, status_text, sheet_name=alt_sheet)
-                    if alt_res.get("status") == "success":
-                        sheet_res = alt_res
-                        target_sheet = alt_sheet
-
-                if sheet_res.get("status") == "success":
-                    old_status = sheet_res.get("old_status") or "On Hold"
-                    row_idx = sheet_res.get("row", "-")
-                    sheet_photo_url = sheet_res.get("photo_url")
-                    item_name = sheet_res.get("item_name")
-                    sheet_label = "PO" if target_sheet == "PHOTO OWNER" else "PS"
-
-                    pesan_konfirmasi = (
-                        f"{cmd_icon} *LAPORAN {cmd_title} IDWX*\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
-                        f"🔢 *Kode / SKU:* {sku}\n"
-                        f"👤 *Diupdate oleh:* {sender_name}\n\n"
-                        f"✅ *Spreadsheet (Consignment {sheet_label}):*\n"
-                        f"   • Status: *{old_status}* ➔ *{status_text}*\n"
-                        f"   • Tab: *{target_sheet}* (Baris {row_idx})\n"
-                    )
-                    if item_name:
-                        pesan_konfirmasi += f"   • Jam: *{item_name}*\n"
-
-                    pesan_konfirmasi += (
-                        f"\nℹ️ *Blogspot:* Sudah tidak aktif / dihapus sebelumnya\n"
-                        f"ℹ️ *Shopify:* Sudah berstatus DRAFT / Non-aktif\n"
-                    )
-
-                    resolved_photo = get_watch_photo_url(post=None, sku=sku, fallback_url=sheet_photo_url)
-                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=resolved_photo, sku=sku, fallback_url=sheet_photo_url)
-
-                    return jsonify({
-                        "status": "success",
-                        "command": cmd_type,
-                        "status_text": status_text,
-                        "sku": sku,
-                        "photo_url": resolved_photo,
-                        "target_sheet": target_sheet,
-                        "trigger": "blogspot_post_not_found_spreadsheet_only",
-                        "spreadsheet_consignment": sheet_res
-                    }), 200
-                else:
-                    err_msg = sheet_res.get("message", "SKU tidak ditemukan di tab PHOTO STUDIO maupun PHOTO OWNER")
-                    pesan_konfirmasi = (
-                        f"⚠️ *GAGAL {cmd_title} IDWX*\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
-                        f"🔢 *Kode / SKU:* {sku}\n"
-                        f"👤 *Pengirim:* {sender_name}\n\n"
-                        f"❌ *Blogspot:* Postingan tidak ditemukan\n"
-                        f"❌ *Spreadsheet (Consignment):* {err_msg}\n"
-                    )
-                    resolved_photo = get_watch_photo_url(post=None, sku=sku)
-                    kirim_balasan_wa(chat_id, pesan_konfirmasi.strip(), image_url=resolved_photo, sku=sku)
-                    return jsonify({
-                        "status": "not_found",
-                        "command": cmd_type,
-                        "sku": sku,
-                        "message": f"Postingan Blogspot tidak ada dan {err_msg}"
-                    }), 200
-
-            # 1. Update Shopify: Status DRAFT & Stock 0
-            shopify_res = update_shopify_takedown(sku, blogger_post=post)
-
-            # 2. Hapus Postingan Blogspot (Masuk ke Sampah / Trash)
-            blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
-            if service:
-                if post:
-                    blogger_res = delete_blogger_post(service, post)
+                    # Safety Guard: Periksa benturan merek antara Blogspot dan Shopify
+                    if shopify_product_title:
+                        conflict, b_blog, b_shop = is_brand_conflict(post_title, shopify_product_title)
+                        if conflict:
+                            print(f"🚨 ALERT: Benturan merek terdeteksi! Blogspot '{b_blog}' vs Shopify '{b_shop}'. Membatalkan takedown Blogspot demi keamanan.")
+                            blogger_res = {
+                                "status": "mismatch_aborted",
+                                "post_title": post_title,
+                                "brand_blog": b_blog,
+                                "brand_shop": b_shop,
+                                "message": f"Dibatalkan otomatis demi keamanan: Merek Blogspot ({b_blog}) berbeda dengan Shopify ({b_shop})"
+                            }
+                        else:
+                            blogger_res = delete_blogger_post(service, post)
+                    else:
+                        blogger_res = delete_blogger_post(service, post)
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
 
-            # 3. Update Google Spreadsheet Consignment Listing (PHOTO STUDIO / PHOTO OWNER)
+            # 3. Update Google Spreadsheet
             canonical_sku = (extract_sku_from_blogger_post(post)[0] if post else None) or shopify_res.get("matched_sku") or clean_sku_string(sku)
             sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
             sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
             sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
 
-            if is_consign_ps:
-                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO) status ke '{status_text}'...")
-                sheet_consign_ps_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO STUDIO")
-            elif is_consign_po:
-                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER) status ke '{status_text}'...")
-                sheet_consign_po_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
+            if post and blogger_res.get("status") == "success":
+                # Jika postingan Blogspot ada dan berhasil dipindahkan ke Sampah
+                if is_consign_ps:
+                    print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO) status ke '{status_text}'...")
+                    sheet_consign_ps_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO STUDIO")
+                elif is_consign_po:
+                    print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER) status ke '{status_text}'...")
+                    sheet_consign_po_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
+                else:
+                    print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO.")
+
+                if is_featured:
+                    print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL) status ke '{status_text}'...")
+                    sheet_slow_moving_res = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
             else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO.")
+                # KONDISI KHUSUS: Postingan Blogspot tidak ditemukan atau dibatalkan karena benturan merek
+                # Tetap periksa dan update Google Spreadsheet yang relevan
+                print(f"ℹ️ Memeriksa Google Spreadsheet untuk SKU '{sku}' (canonical: '{canonical_sku}')...")
+                target_sheet = "PHOTO OWNER" if sku.upper().startswith("CPO") else "PHOTO STUDIO"
+                sheet_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name=target_sheet)
 
-            if is_featured:
-                print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL) status ke '{status_text}'...")
-                sheet_slow_moving_res = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
+                if sheet_res.get("status") == "success":
+                    if target_sheet == "PHOTO OWNER":
+                        is_consign_po = True
+                        sheet_consign_po_res = sheet_res
+                    else:
+                        is_consign_ps = True
+                        sheet_consign_ps_res = sheet_res
+                else:
+                    alt_sheet = "PHOTO STUDIO" if target_sheet == "PHOTO OWNER" else "PHOTO OWNER"
+                    alt_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name=alt_sheet)
+                    if alt_res.get("status") == "success":
+                        if alt_sheet == "PHOTO OWNER":
+                            is_consign_po = True
+                            sheet_consign_po_res = alt_res
+                        else:
+                            is_consign_ps = True
+                            sheet_consign_ps_res = alt_res
+                    else:
+                        # Jika tidak ditemukan di Consignment, cek Spreadsheet Slow Moving (ALL STOCK)
+                        print(f"🔍 SKU '{sku}' tidak ditemukan di Consignment. Memeriksa Spreadsheet Slow Moving (Tab ALL STOCK)...")
+                        sheet_slow_res = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
+                        if sheet_slow_res.get("status") == "success":
+                            is_featured = True
+                            sheet_slow_moving_res = sheet_slow_res
+                            print(f"✅ Ditemukan dan berhasil diupdate di Spreadsheet Slow Moving (Baris {sheet_slow_res.get('row', '-')}, Tab {sheet_slow_res.get('tab_name', '-')})")
+                        else:
+                            print(f"ℹ️ SKU '{sku}' juga tidak ditemukan di Slow Moving: {sheet_slow_res.get('message', '')}")
 
-            # 4. Kirim Balasan Laporan Lengkap ke WhatsApp (beserta foto jika ada)
+            # 4. Format Laporan Konfirmasi WhatsApp
             status_shop_icon = "✅" if shopify_res.get("status") == "success" else "⚠️"
-            status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
+            status_blog_icon = "✅" if blogger_res.get("status") == "success" else ("⚠️" if blogger_res.get("status") == "mismatch_aborted" else "ℹ️")
 
             sku_display = sku
             if shopify_res.get("matched_sku") and shopify_res.get("matched_sku").upper() != clean_sku_string(sku).upper():
@@ -2425,15 +2713,21 @@ def wa_webhook():
             if shopify_res.get("status") == "success":
                 pesan_konfirmasi += "   • Status: *DRAFT*\n   • Stock: *0*\n"
 
-            pesan_konfirmasi += f"{status_blog_icon} *Blogspot:* "
-            if blogger_res.get("already_in_trash"):
-                pesan_konfirmasi += f"Sudah di Sampah (Trash) sebelumnya\n   • Judul: {blogger_res.get('post_title', '-')}\n"
+            if blogger_res.get("status") == "mismatch_aborted":
+                pesan_konfirmasi += (
+                    f"⚠️ *Blogspot: DIBATALKAN (Mencegah Salah Takedown!)*\n"
+                    f"   • Judul Blogspot: {blogger_res.get('post_title', '-')}\n"
+                    f"   • Peringatan: Merek Blogspot *({blogger_res.get('brand_blog')})* berbeda dengan Shopify *({blogger_res.get('brand_shop')})*.\n"
+                    f"   • Postingan Blogspot *TIDAK* dihapus demi keamanan.\n"
+                )
+            elif blogger_res.get("already_in_trash"):
+                pesan_konfirmasi += f"✅ *Blogspot:* Sudah di Sampah (Trash) sebelumnya\n   • Judul: {blogger_res.get('post_title', '-')}\n"
             elif blogger_res.get("status") == "success":
-                pesan_konfirmasi += f"Dipindahkan ke Sampah (Trash)\n   • Judul: {blogger_res.get('post_title', '-')}\n"
+                pesan_konfirmasi += f"✅ *Blogspot:* Dipindahkan ke Sampah (Trash)\n   • Judul: {blogger_res.get('post_title', '-')}\n"
                 if blogger_res.get("publish_date"):
                     pesan_konfirmasi += f"   • Publish Date: {blogger_res.get('publish_date')}\n"
             else:
-                pesan_konfirmasi += f"{blogger_res.get('message', 'Gagal')}\n"
+                pesan_konfirmasi += f"ℹ️ *Blogspot:* {blogger_res.get('message', 'Postingan tidak ditemukan / sudah tidak aktif')}\n"
 
             # Status Spreadsheet Consignment
             if is_consign_ps:
@@ -2460,16 +2754,18 @@ def wa_webhook():
                     pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
 
             if not is_consign_ps and not is_consign_po and not is_featured:
-                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / PO / FEATURED)\n"
+                pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (SKU tidak ditemukan di Consignment maupun Slow Moving)\n"
 
-            if post_description:
+            if post_description and blogger_res.get("status") == "success":
                 pesan_konfirmasi += f"\n━━━━━━━━━━━━━━━━━━\n{post_description}\n"
 
-            # Resolusi foto jam tangan: Prioritas Blogspot -> Fallback Shopify
+            # 5. Resolusi foto produk (Prioritas Blogspot jika sukses -> Fallback Shopify -> Fallback Spreadsheet)
+            fallback_sheet_photo = sheet_consign_ps_res.get("photo_url") or sheet_consign_po_res.get("photo_url")
             photo_url = get_watch_photo_url(
-                post=post,
+                post=post if blogger_res.get("status") == "success" else None,
                 sku=sku,
-                shopify_product=shopify_res.get("product_node")
+                shopify_product=shopify_res.get("product_node"),
+                fallback_url=fallback_sheet_photo
             )
 
             kirim_balasan_wa(
@@ -2477,8 +2773,9 @@ def wa_webhook():
                 pesan_konfirmasi.strip(),
                 image_url=photo_url,
                 sku=sku,
-                blogger_post=post,
-                shopify_product=shopify_res.get("product_node")
+                blogger_post=post if blogger_res.get("status") == "success" else None,
+                shopify_product=shopify_res.get("product_node"),
+                fallback_url=fallback_sheet_photo
             )
 
             return jsonify({
