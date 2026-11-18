@@ -275,9 +275,26 @@ function doPost(e) {
       }
 
       // 2. Eksekusi jika Aksi UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
+      var fillApplied = false;
       if (isStatusAction && matchedMapping && matchedMapping.hasStatusCol && matchedMapping.colStatus > 0) {
         newStatusApplied = (data.status_text || "SOLD").toString().trim().toUpperCase();
         foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
+
+        // Jika status SOLD pada tab ALL STOCK: Atur fill color Kolom D sampai L (kolom 4 s/d 12) menjadi merah
+        if (newStatusApplied === "SOLD") {
+          var startCol = 4; // Kolom D
+          var endCol = 12;  // Kolom L
+          var numCols = (endCol - startCol + 1); // 9 kolom (D, E, F, G, H, I, J, K, L)
+          if (foundSheet.getName() === "ALL STOCK") {
+            foundSheet.getRange(foundRow, startCol, 1, numCols).setBackground("#ea4335");
+            fillApplied = true;
+          } else {
+            var sCol = matchedMapping.colBrand > 0 ? matchedMapping.colBrand : 1;
+            var eCol = matchedMapping.colSerial > 0 ? matchedMapping.colSerial : foundSheet.getLastColumn();
+            foundSheet.getRange(foundRow, sCol, 1, (eCol - sCol + 1)).setBackground("#ea4335");
+            fillApplied = true;
+          }
+        }
       }
 
       return ContentService.createTextOutput(JSON.stringify({
@@ -292,7 +309,8 @@ function doPost(e) {
         "new_price": numericPrice,
         "old_status": oldStatusVal,
         "new_status": newStatusApplied,
-        "formatted_price": data.formatted_price
+        "formatted_price": data.formatted_price,
+        "fill_color": fillApplied ? "red (#ea4335) applied to Col D-L" : "none"
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
