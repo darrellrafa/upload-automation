@@ -63,10 +63,19 @@ SHOPIFY_CLIENT_ID = get_required_env("SHOPIFY_CLIENT_ID")
 SHOPIFY_CLIENT_SECRET = get_required_env("SHOPIFY_CLIENT_SECRET")
 
 # URL Webhook (Apps Script)
-GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/your_apps_script_url/exec"
+# 1. Spreadsheet Consignment Listing (Tab PHOTO STUDIO & Tab PHOTO OWNER)
+Consignment_Listing_Photo_Studio = "https://script.google.com/macros/s/your_apps_script_url/exec"
+Consignment_Listing_Photo_Owner = "https://script.google.com/macros/s/your_apps_script_url/exec"
+CONSIGNMENT_LISTING_PHOTO_STUDIO = Consignment_Listing_Photo_Studio
+CONSIGNMENT_LISTING_PHOTO_OWNER = Consignment_Listing_Photo_Owner
+GOOGLE_WEB_APP_URL = Consignment_Listing_Photo_Studio
+OWNER_APPS_SCRIPT_URL = Consignment_Listing_Photo_Owner
+
+# 2. Spreadsheet History Foto Studio (Tracking Draf Jam Baru & Antrean Video)
 APPS_SCRIPT_HISTORY_PHOTO_STUDIO = "https://script.google.com/macros/s/your_apps_script_url/exec"
+
+# 3. Spreadsheet Slow Moving Items (Featured Items Reprice & Stock Tracking)
 FEATURED_WEB_APP_URL = "https://script.google.com/macros/s/your_apps_script_url/exec"
-OWNER_APPS_SCRIPT_URL = "https://script.google.com/macros/s/your_apps_script_url/exec"
 
 # Daftar Merek IDWX (gabungan dari semua script)
 DAFTAR_MEREK_IDWX = {
@@ -1171,9 +1180,9 @@ def process_photo_studio(blogger_service, urls):
                         except: pass
                     except Exception as e: print(f"   ⚠️ Error Webhook Featured Sheets: {e}")
 
-                # 2. Kirim ke Webhook LAMA Google Sheets Photo Studio (Khusus Consignment)
+                # 2. Kirim ke Webhook Google Sheets Consignment Listing Photo Studio
                 if is_consign_item:
-                    print(f"   📝 Item Consign. Update SKU Asli '{sku_pencarian}' di Webhook LAMA Photo Studio...")
+                    print(f"   📝 Item Consign. Update SKU Asli '{sku_pencarian}' di Webhook Consignment Listing (Photo Studio)...")
                     try:
                         tanggal_hari_ini = now.strftime(f"%A, {now.day} %B %Y")
                         payload_sheets_lama = {
@@ -1183,10 +1192,10 @@ def process_photo_studio(blogger_service, urls):
                             "photo_url": first_image_url,
                             "status": "Publish"
                         }
-                        requests.post(GOOGLE_WEB_APP_URL, json=payload_sheets_lama, timeout=30)
-                        print(f"   ✅ Apps Script LAMA (Photo Studio) terkirim untuk SKU {sku_pencarian}!")
+                        requests.post(Consignment_Listing_Photo_Studio, json=payload_sheets_lama, timeout=30)
+                        print(f"   ✅ Apps Script Consignment Listing (Photo Studio) terkirim untuk SKU {sku_pencarian}!")
                     except Exception as e:
-                        print(f"   ⚠️ Error Webhook LAMA Sheets: {e}")
+                        print(f"   ⚠️ Error Webhook Sheets Consignment Photo Studio: {e}")
 
                 # 3. Kirim ke Webhook BARU (Spreadsheet History Foto Studio) - Update Status ke 'Video'
                 # Catatan: Status diatur ke 'Video' karena produk baru selesai di Shopify tetapi video YouTube belum terupload.
@@ -1384,11 +1393,11 @@ def process_photo_owner(blogger_service, urls):
                     requests.post(inv_url, headers=HEADERS_SHOPIFY, json=inv_payload, timeout=30)
                     print(f"   📦 Stok disetel ke 1 untuk OWNER (S).")
 
-                print(f"   🔍 Mengirim perintah ke Spreadsheet untuk mencentang SKU '{sku}'...")
+                print(f"   🔍 Mengirim perintah ke Spreadsheet Consignment Listing untuk mencentang SKU '{sku}'...")
                 try:
                     sku_pencarian = base_sku if 'base_sku' in locals() and base_sku else sku
                     payload_ke_gsheets = {"action": "check_web_owner", "sku": sku_pencarian}
-                    app_res = requests.post(OWNER_APPS_SCRIPT_URL, json=payload_ke_gsheets, timeout=30)
+                    app_res = requests.post(Consignment_Listing_Photo_Owner, json=payload_ke_gsheets, timeout=30)
 
                     if app_res.status_code == 200:
                         try:
