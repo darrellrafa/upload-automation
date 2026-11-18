@@ -2027,10 +2027,11 @@ def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, 
     Mengirim perintah update harga ke Google Apps Script Spreadsheet 'Stock List Slow Moving Items'.
     Kriteria:
     - Hanya jika produk memiliki label FEATURED di Blogspot.
-    - Mencari di tab 'ALL STOCK' atau 'NEW ARRIVAL'.
-    - Mencocokkan SKU / Serial Number di Kolom K (SERIAL NUMBER).
-    - Memperbarui Status di Kolom B menjadi 'REPRICE' (jika REPRICE).
-    - Memperbarui Harga di Kolom I (PRICE) menjadi harga baru.
+    - Mencari di tab 'ALL STOCK' (prioritas) atau 'NEW ARRIVAL'.
+    - Mencocokkan SKU / Serial Number di Kolom L (SERIAL NUMBER).
+    - Memperbarui Harga langsung di Kolom J (PRICE) dengan harga baru (numerik format #,##0).
+    - Memperbarui Status di Kolom C (STATUS) menjadi 'REPRICE' (jika REPRICE).
+    (Catatan: Spreadsheet Slow Moving tidak memiliki kolom NOTES; harga langsung ditimpa di Kolom J).
     """
     payload = {
         "action": "reprice_slow_moving",

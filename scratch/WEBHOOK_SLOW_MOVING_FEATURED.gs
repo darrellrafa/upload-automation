@@ -149,6 +149,12 @@ function doPost(e) {
       var inputSku = (data.sku || "").toString().trim().toUpperCase();
       var canonicalSku = (data.canonical_sku || "").toString().trim().toUpperCase();
       var numericPrice = Number(data.numeric_price || 0);
+      if (numericPrice <= 0) {
+        var rawPriceVal = String(data.formatted_price || data.new_price || data.price || "").replace(/[^\d]/g, "");
+        if (rawPriceVal) {
+          numericPrice = Number(rawPriceVal);
+        }
+      }
 
       // Kumpulkan kandidat SKU (termasuk serial ganda dengan garis miring /)
       var searchTerms = [];
@@ -254,12 +260,14 @@ function doPost(e) {
 
       // 1. Eksekusi jika Aksi REPRICE / HARGA BARU
       if (isRepriceAction && matchedMapping) {
+        // CATATAN PENTING: Pada Spreadsheet Slow Moving (Tab ALL STOCK), TIDAK ADA kolom NOTES.
+        // Yang diubah langsung adalah nilai pada Kolom J (PRICE) dengan harga baru numerik.
         if (matchedMapping.colPrice > 0 && numericPrice > 0) {
           foundSheet.getRange(foundRow, matchedMapping.colPrice).setValue(numericPrice);
           foundSheet.getRange(foundRow, matchedMapping.colPrice).setNumberFormat("#,##0");
         }
 
-        // Tulis "REPRICE" di kolom Status jika ada kolom STATUS
+        // Tulis "REPRICE" di Kolom C (STATUS) jika ada kolom STATUS
         if (matchedMapping.hasStatusCol && matchedMapping.colStatus > 0 && data.command_type === "REPRICE") {
           newStatusApplied = "REPRICE";
           foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
