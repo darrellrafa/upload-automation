@@ -1944,15 +1944,23 @@ def update_consignment_sheet(sku, command_type, formatted_price="", numeric_pric
         "notes_text": notes_text
     }
 
-    try:
-        res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json=payload, timeout=25)
-        if res.status_code == 200:
-            return res.json()
-        else:
-            return {"status": "error", "message": f"HTTP status {res.status_code}"}
-    except Exception as e:
-        print(f"⚠️ Error Webhook Sheets Consignment ({sheet_name}): {e}")
-        return {"status": "error", "message": str(e)}
+    for attempt in range(2):
+        try:
+            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json=payload, timeout=60)
+            if res.status_code == 200:
+                return res.json()
+            else:
+                return {"status": "error", "message": f"HTTP status {res.status_code}"}
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                print(f"⚠️ Percobaan 1 Timeout Webhook Sheets Consignment ({sheet_name}) setelah 60s. Mengulang...")
+                time.sleep(1)
+                continue
+            print(f"⚠️ Error Timeout Webhook Sheets Consignment ({sheet_name}) setelah 2x percobaan.")
+            return {"status": "error", "message": "Google Sheets timeout (>60s). Sedang diproses di background."}
+        except Exception as e:
+            print(f"⚠️ Error Webhook Sheets Consignment ({sheet_name}): {e}")
+            return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
 
 def update_consignment_ps_sheet(sku, command_type, formatted_price, numeric_price):
     return update_consignment_sheet(sku, command_type, formatted_price, numeric_price, sheet_name="PHOTO STUDIO")
@@ -1996,15 +2004,23 @@ def update_consignment_status_sheet(sku, status_text, sheet_name="PHOTO STUDIO")
         "notes_text": notes_text
     }
 
-    try:
-        res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json=payload, timeout=25)
-        if res.status_code == 200:
-            return res.json()
-        else:
-            return {"status": "error", "message": f"HTTP status {res.status_code}"}
-    except Exception as e:
-        print(f"⚠️ Error Webhook Sheets Consignment Status ({sheet_name}): {e}")
-        return {"status": "error", "message": str(e)}
+    for attempt in range(2):
+        try:
+            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json=payload, timeout=60)
+            if res.status_code == 200:
+                return res.json()
+            else:
+                return {"status": "error", "message": f"HTTP status {res.status_code}"}
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                print(f"⚠️ Percobaan 1 Timeout Webhook Sheets Consignment Status ({sheet_name}) setelah 60s. Mengulang...")
+                time.sleep(1)
+                continue
+            print(f"⚠️ Error Timeout Webhook Sheets Consignment Status ({sheet_name}) setelah 2x percobaan.")
+            return {"status": "error", "message": "Google Sheets timeout (>60s). Sedang diproses di background."}
+        except Exception as e:
+            print(f"⚠️ Error Webhook Sheets Consignment Status ({sheet_name}): {e}")
+            return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
 
 def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, canonical_sku=None):
     """
@@ -2025,14 +2041,16 @@ def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, 
         "numeric_price": numeric_price
     }
     try:
-        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=25)
+        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=60)
         if res.status_code == 200:
             return res.json()
         else:
             return {"status": "error", "message": f"HTTP status {res.status_code}"}
+    except requests.exceptions.Timeout:
+        return {"status": "error", "message": "Google Sheets Slow Moving timeout (>60s). Sedang diproses di background."}
     except Exception as e:
         print(f"⚠️ Error Webhook Sheets Slow Moving: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
 
 # ==============================================================================
 # 6. ROUTE ENDPOINTS
@@ -2594,7 +2612,7 @@ def wa_webhook():
             "notes": catatan_notes
         }
 
-        res_sheets = requests.post(APPS_SCRIPT_HISTORY_URL, json=payload_sheets, timeout=20)
+        res_sheets = requests.post(APPS_SCRIPT_HISTORY_URL, json=payload_sheets, timeout=45)
         res_data = res_sheets.json() if res_sheets.status_code == 200 else {}
 
         # Mode Hening (Silent Mode): Tidak mengirim balasan WA ke grup untuk input jam baru
