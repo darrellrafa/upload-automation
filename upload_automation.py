@@ -1162,20 +1162,43 @@ def process_photo_studio(blogger_service, urls):
                 # 1. Kirim ke Spreadsheet Slow Moving (Khusus Featured -> Tab ALL STOCK)
                 if is_featured:
                     print(f"   ⭐ Item FEATURED. Mengirim data ke Spreadsheet Slow Moving (Tab ALL STOCK)...")
-                    try:
-                        tanggal_hari_ini = now.strftime("%d/%m/%Y")
-                        payload_featured = {
-                            "date": tanggal_hari_ini, "owner": owner.upper() if owner else "", "brand": vendor.upper(),
-                            "description": display_title_no_year.upper(), "year": year, "condition": condition.upper(),
-                            "price": price, "reference": reference, "serial_number": sku_pencarian, "link": url
-                        }
-                        res_feat = requests.post(WEBHOOK_SLOW_MOVING_FEATURED, json=payload_featured, timeout=60)
+                    tanggal_hari_ini = now.strftime("%d/%m/%Y")
+                    payload_featured = {
+                        "date": tanggal_hari_ini, "owner": owner.upper() if owner else "", "brand": vendor.upper(),
+                        "description": display_title_no_year.upper(), "year": year, "condition": condition.upper(),
+                        "price": price, "reference": reference, "serial_number": sku_pencarian, "link": url
+                    }
+                    feat_saved = False
+                    max_feat_attempts = 3
+                    for feat_attempt in range(1, max_feat_attempts + 1):
+                        if not WEBHOOK_SLOW_MOVING_FEATURED:
+                            print("   ⚠️ WEBHOOK_SLOW_MOVING_FEATURED belum diatur di environment.")
+                            break
                         try:
-                            res_feat_data = res_feat.json()
-                            if res_feat.status_code == 200 and res_feat_data.get("status") == "success": print(f"   📊 Berhasil! {res_feat_data.get('message')}")
-                            else: print(f"   ⚠️ Gagal update Sheets Featured: {res_feat_data.get('message')}")
-                        except: pass
-                    except Exception as e: print(f"   ⚠️ Error Webhook Featured Sheets: {e}")
+                            res_feat = requests.post(WEBHOOK_SLOW_MOVING_FEATURED, json=payload_featured, timeout=60)
+                            if res_feat.status_code == 200:
+                                try:
+                                    res_feat_data = res_feat.json()
+                                    if res_feat_data.get("status") == "success":
+                                        print(f"   📊 Berhasil! {res_feat_data.get('message')}")
+                                        feat_saved = True
+                                        break
+                                    else:
+                                        print(f"   ⚠️ Percobaan {feat_attempt}/{max_feat_attempts} gagal update Sheets Featured: {res_feat_data.get('message')}")
+                                except Exception as ej:
+                                    print(f"   ⚠️ Percobaan {feat_attempt}/{max_feat_attempts} respons non-JSON ({res_feat.status_code}): {res_feat.text[:120]}")
+                            else:
+                                print(f"   ⚠️ Percobaan {feat_attempt}/{max_feat_attempts} HTTP {res_feat.status_code}: {res_feat.text[:120]}")
+                        except requests.exceptions.Timeout:
+                            print(f"   ⚠️ Percobaan {feat_attempt}/{max_feat_attempts} Timeout ke Sheets Featured (>60s)...")
+                        except Exception as e_req:
+                            print(f"   ⚠️ Percobaan {feat_attempt}/{max_feat_attempts} Error Webhook Featured Sheets: {e_req}")
+
+                        if feat_attempt < max_feat_attempts:
+                            time.sleep(2 * feat_attempt)
+
+                    if not feat_saved and WEBHOOK_SLOW_MOVING_FEATURED:
+                        print(f"   🚨 PERINGATAN: Sinkronisasi data Featured SKU '{sku_pencarian}' ke Spreadsheet Slow Moving gagal setelah {max_feat_attempts} percobaan!")
 
                 # 2. Kirim ke Webhook Google Sheets Consignment Listing (Tab PHOTO STUDIO)
                 if is_consign_item:

@@ -62,32 +62,35 @@ function doPost(e) {
       // Deteksi dinamis header baris 1 s/d 5 jika teks header tertera jelas
       var maxScanRows = Math.min(sheet.getLastRow(), 5);
       if (maxScanRows > 0) {
-        var sampleRows = sheet.getRange(1, 1, maxScanRows, Math.max(sheet.getLastColumn(), 13)).getValues();
-        for (var r = 0; r < sampleRows.length; r++) {
-          var row = sampleRows[r];
-          var matches = 0;
-          var tempMap = {};
-          for (var c = 0; c < row.length; c++) {
-            var h = (row[c] || "").toString().trim().toUpperCase();
-            if (h === "SERIAL NUMBER" || h === "SERIAL" || h === "SKU") { tempMap.colSerial = c + 1; matches++; }
-            else if (h === "PRICE" || h === "HARGA") { tempMap.colPrice = c + 1; matches++; }
-            else if (h === "STATUS") { tempMap.colStatus = c + 1; tempMap.hasStatusCol = true; matches++; }
-            else if (h === "BRAND" || h === "BRAND/TYPE" || h === "MERK") { tempMap.colBrand = c + 1; matches++; }
-            else if (h === "DESCRIPTION" || h === "DESKRIPSI" || h === "ITEM" || h === "NAMA BARANG") { tempMap.colDesc = c + 1; matches++; }
-            else if (h === "OWNER" || h === "TITIP" || h === "NAMA TITIP") { tempMap.colOwner = c + 1; matches++; }
-            else if (h === "DATE" || h === "TANGGAL") { tempMap.colDate = c + 1; matches++; }
-            else if (h === "NO" || h === "NO." || h === "NOMOR") { tempMap.colNo = c + 1; matches++; }
-            else if (h === "YEAR" || h === "TAHUN") { tempMap.colYear = c + 1; matches++; }
-            else if (h === "CONDITION" || h === "KONDISI") { tempMap.colCondition = c + 1; matches++; }
-            else if (h === "REFERENCE" || h === "REF" || h === "NO. REF") { tempMap.colReference = c + 1; matches++; }
-            else if (h === "LINK WEBSITE" || h === "LINK" || h === "URL") { tempMap.colLink = c + 1; matches++; }
-          }
-          if (matches >= 3) {
-            mapping.headerRow = r + 1;
-            for (var k in tempMap) {
-              mapping[k] = tempMap[k];
+        var maxScanCols = Math.min(Math.max(sheet.getLastColumn(), 13), sheet.getMaxColumns());
+        if (maxScanCols > 0) {
+          var sampleRows = sheet.getRange(1, 1, maxScanRows, maxScanCols).getValues();
+          for (var r = 0; r < sampleRows.length; r++) {
+            var row = sampleRows[r];
+            var matches = 0;
+            var tempMap = {};
+            for (var c = 0; c < row.length; c++) {
+              var h = (row[c] || "").toString().trim().toUpperCase();
+              if (h === "SERIAL NUMBER" || h === "SERIAL" || h === "SKU") { tempMap.colSerial = c + 1; matches++; }
+              else if (h === "PRICE" || h === "HARGA") { tempMap.colPrice = c + 1; matches++; }
+              else if (h === "STATUS") { tempMap.colStatus = c + 1; tempMap.hasStatusCol = true; matches++; }
+              else if (h === "BRAND" || h === "BRAND/TYPE" || h === "MERK") { tempMap.colBrand = c + 1; matches++; }
+              else if (h === "DESCRIPTION" || h === "DESKRIPSI" || h === "ITEM" || h === "NAMA BARANG") { tempMap.colDesc = c + 1; matches++; }
+              else if (h === "OWNER" || h === "TITIP" || h === "NAMA TITIP") { tempMap.colOwner = c + 1; matches++; }
+              else if (h === "DATE" || h === "TANGGAL") { tempMap.colDate = c + 1; matches++; }
+              else if (h === "NO" || h === "NO." || h === "NOMOR") { tempMap.colNo = c + 1; matches++; }
+              else if (h === "YEAR" || h === "TAHUN") { tempMap.colYear = c + 1; matches++; }
+              else if (h === "CONDITION" || h === "KONDISI") { tempMap.colCondition = c + 1; matches++; }
+              else if (h === "REFERENCE" || h === "REF" || h === "NO. REF") { tempMap.colReference = c + 1; matches++; }
+              else if (h === "LINK WEBSITE" || h === "LINK" || h === "URL") { tempMap.colLink = c + 1; matches++; }
             }
-            break;
+            if (matches >= 3) {
+              mapping.headerRow = r + 1;
+              for (var k in tempMap) {
+                mapping[k] = tempMap[k];
+              }
+              break;
+            }
           }
         }
       }
@@ -340,6 +343,11 @@ function doPost(e) {
 
     var mapping = getSheetColumnMapping(sheet);
 
+    // Pastikan sheet memiliki jumlah kolom minimal 13 kolom
+    if (sheet.getMaxColumns() < mapping.totalCols) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), mapping.totalCols - sheet.getMaxColumns());
+    }
+
     // Konversi harga ke angka numerik murni
     var rawPrice = String(data.price || "").replace(/[^\d]/g, "");
     var numericPriceInput = rawPrice ? Number(rawPrice) : 0;
@@ -363,11 +371,15 @@ function doPost(e) {
     // Proteksi duplikasi: Jika serial_number sudah pernah ada di sheet ALL STOCK, update baris tersebut
     var existingRow = -1;
     var searchSerial = (data.serial_number || "").toString().trim().toUpperCase();
-    if (searchSerial && mapping.colSerial > 0 && lastRow > 1) {
+    var cleanSearchBase = searchSerial.replace(/-\d+$/, '').trim();
+
+    if (searchSerial.length >= 2 && mapping.colSerial > 0 && lastRow > 1) {
       var serialList = sheet.getRange(1, mapping.colSerial, lastRow, 1).getValues();
       for (var sRow = serialList.length - 1; sRow >= 1; sRow--) {
         var cellSerial = (serialList[sRow][0] || "").toString().trim().toUpperCase();
-        if (cellSerial === searchSerial || cellSerial.replace(/-\d+$/, '').trim() === searchSerial.replace(/-\d+$/, '').trim()) {
+        if (!cellSerial) continue;
+        var cleanCellBase = cellSerial.replace(/-\d+$/, '').trim();
+        if (cellSerial === searchSerial || (cleanSearchBase && cleanCellBase === cleanSearchBase)) {
           existingRow = sRow + 1;
           break;
         }
@@ -376,6 +388,12 @@ function doPost(e) {
 
     var targetRow = (existingRow > 0) ? existingRow : insertRow;
     var actionMessage = (existingRow > 0) ? ("Diperbarui di baris " + targetRow) : ("Tersimpan rapi di baris " + targetRow);
+
+    // Pastikan sheet memiliki baris yang cukup untuk targetRow (cegah error Range out of bounds)
+    if (targetRow > sheet.getMaxRows()) {
+      var rowsToAdd = (targetRow - sheet.getMaxRows()) + 10;
+      sheet.insertRowsAfter(sheet.getMaxRows(), rowsToAdd);
+    }
 
     // Buat susunan data sesuai pemetaan kolom
     var rowData = new Array(mapping.totalCols);
@@ -483,10 +501,31 @@ function doPost(e) {
       } catch (errCopy) {
         // Abaikan jika tidak ada validasi khusus
       }
+
+      // PENTING: Bersihkan background color dari format copy agar TIDAK mewarisi warna merah SOLD/ON HOLD
+      try {
+        targetRange.setBackground(null);
+        // Pertahankan warna background indikator di Kolom A jika ada
+        if (mapping.colIndicator > 0) {
+          var prevBgA = sheet.getRange(prevRow, mapping.colIndicator).getBackground();
+          if (prevBgA && prevBgA !== "#ffffff") {
+            sheet.getRange(targetRow, mapping.colIndicator).setBackground(prevBgA);
+          }
+        }
+      } catch (errBg) {
+        // Abaikan jika gagal reset background
+      }
     }
     
     // Tulis data ke Sheet
     sheet.getRange(targetRow, 1, 1, rowData.length).setValues([rowData]);
+
+    // Format kolom DATE sebagai Plain Text agar tanggal tidak tertukar
+    if (mapping.colDate > 0) {
+      try {
+        sheet.getRange(targetRow, mapping.colDate).setNumberFormat("@");
+      } catch (eDateFmt) {}
+    }
 
     // Format kolom PRICE dengan format pemisah ribuan (#,##0)
     if (mapping.colPrice > 0 && numericPriceInput > 0) {
@@ -498,6 +537,9 @@ function doPost(e) {
       "message": actionMessage + " (Tab " + targetTabName + ")",
       "tab_name": targetTabName,
       "row": targetRow,
+      "sku": searchSerial,
+      "brand": data.brand || "",
+      "price": numericPriceInput,
       "is_updated": (existingRow > 0)
     })).setMimeType(ContentService.MimeType.JSON);
       

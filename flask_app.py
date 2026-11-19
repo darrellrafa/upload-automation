@@ -2336,17 +2336,26 @@ def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, 
         "formatted_price": formatted_price,
         "numeric_price": numeric_price
     }
-    try:
-        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=60)
-        if res.status_code == 200:
-            return res.json()
-        else:
-            return {"status": "error", "message": f"HTTP status {res.status_code}"}
-    except requests.exceptions.Timeout:
-        return {"status": "error", "message": "Google Sheets Slow Moving timeout (>60s). Sedang diproses di background."}
-    except Exception as e:
-        print(f"⚠️ Error Webhook Sheets Slow Moving: {e}")
-        return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
+    for attempt in range(2):
+        try:
+            res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=60)
+            if res.status_code == 200:
+                return res.json()
+            elif attempt == 0:
+                time.sleep(2)
+            else:
+                return {"status": "error", "message": f"HTTP status {res.status_code}"}
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                time.sleep(2)
+            else:
+                return {"status": "error", "message": "Google Sheets Slow Moving timeout (>60s). Sedang diproses di background."}
+        except Exception as e:
+            if attempt == 0:
+                time.sleep(2)
+            else:
+                print(f"⚠️ Error Webhook Sheets Slow Moving: {e}")
+                return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
 
 def update_slow_moving_status_sheet(sku, status_text, canonical_sku=None):
     """
@@ -2370,17 +2379,26 @@ def update_slow_moving_status_sheet(sku, status_text, canonical_sku=None):
         "canonical_sku": canonical_sku,
         "status_text": clean_status
     }
-    try:
-        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=60)
-        if res.status_code == 200:
-            return res.json()
-        else:
-            return {"status": "error", "message": f"HTTP status {res.status_code}"}
-    except requests.exceptions.Timeout:
-        return {"status": "error", "message": "Google Sheets Slow Moving timeout (>60s). Sedang diproses di background."}
-    except Exception as e:
-        print(f"⚠️ Error Webhook Sheets Slow Moving Status: {e}")
-        return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
+    for attempt in range(2):
+        try:
+            res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json=payload, timeout=60)
+            if res.status_code == 200:
+                return res.json()
+            elif attempt == 0:
+                time.sleep(2)
+            else:
+                return {"status": "error", "message": f"HTTP status {res.status_code}"}
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                time.sleep(2)
+            else:
+                return {"status": "error", "message": "Google Sheets Slow Moving timeout (>60s). Sedang diproses di background."}
+        except Exception as e:
+            if attempt == 0:
+                time.sleep(2)
+            else:
+                print(f"⚠️ Error Webhook Sheets Slow Moving Status: {e}")
+                return {"status": "error", "message": f"Koneksi Google Sheets gagal: {e}"}
 
 # ==============================================================================
 # 6. ROUTE ENDPOINTS
