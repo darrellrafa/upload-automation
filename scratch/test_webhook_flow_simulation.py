@@ -3,14 +3,16 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-if "flask" not in sys.modules:
-    flask_mock = MagicMock()
-    app_instance = MagicMock()
-    app_instance.route = lambda *args, **kwargs: (lambda f: f)
-    flask_mock.Flask = MagicMock(return_value=app_instance)
-    flask_mock.request = MagicMock()
-    flask_mock.jsonify = lambda x: x
-    sys.modules["flask"] = flask_mock
+for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth2.credentials", "googleapiclient", "googleapiclient.discovery"]:
+    if mod not in sys.modules:
+        m = MagicMock()
+        if mod == "flask":
+            app_inst = MagicMock()
+            app_inst.route = lambda *args, **kwargs: (lambda f: f)
+            m.Flask = MagicMock(return_value=app_inst)
+            m.request = MagicMock()
+            m.jsonify = lambda x: x
+        sys.modules[mod] = m
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

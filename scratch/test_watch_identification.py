@@ -3,15 +3,17 @@ import os
 import unittest
 from unittest.mock import MagicMock
 
-# Mock flask module if not installed locally
-if "flask" not in sys.modules:
-    flask_mock = MagicMock()
-    app_instance = MagicMock()
-    app_instance.route = lambda *args, **kwargs: (lambda f: f)
-    flask_mock.Flask = MagicMock(return_value=app_instance)
-    flask_mock.request = MagicMock()
-    flask_mock.jsonify = lambda x: x
-    sys.modules["flask"] = flask_mock
+# Mock external modules if not installed locally
+for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth2.credentials", "googleapiclient", "googleapiclient.discovery"]:
+    if mod not in sys.modules:
+        m = MagicMock()
+        if mod == "flask":
+            app_inst = MagicMock()
+            app_inst.route = lambda *args, **kwargs: (lambda f: f)
+            m.Flask = MagicMock(return_value=app_inst)
+            m.request = MagicMock()
+            m.jsonify = lambda x: x
+        sys.modules[mod] = m
 
 # Ensure current dir in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,8 +35,8 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertTrue(is_chat_excluded_from_identification("62817626104-1627455181"))
         self.assertTrue(is_chat_excluded_from_identification("62817626104-1627455181@c.us"))
         # Grup lain tidak boleh diabaikan
-        self.assertFalse(is_chat_excluded_from_identification("120363000000000000@g.us"))
-        self.assertFalse(is_chat_excluded_from_identification("628120000000@c.us"))
+        self.assertFalse(is_chat_excluded_from_identification("99999999999-1234567890@g.us"))
+        self.assertFalse(is_chat_excluded_from_identification("628123456789@c.us"))
         self.assertFalse(is_chat_excluded_from_identification(None))
 
     def test_cancellation_chat(self):
@@ -135,6 +137,119 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("• Ketik *on hold* untuk simpan/hold", msg)
         self.assertIn("• Ketik *reprice [harga]* untuk ubah harga", msg)
         self.assertIn("• Ketik *abaikan* / *batal* jika tidak ada tindakan", msg)
+
+    def test_find_active_watch_cpo_preference_for_photo_owner(self):
+        from unittest.mock import patch
+        import flask_app
+
+        # Mock Shopify GraphQL response returning both Studio and CPO watches for Air-King
+        mock_gql_response = {
+            "data": {
+                "products": {
+                    "edges": [
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/1",
+                                "title": "AIR KING (2025)",
+                                "status": "ACTIVE",
+                                "createdAt": "2026-09-09T03:36:20Z",
+                                "featuredImage": {"url": "https://example.com/studio.jpg"},
+                                "variants": {
+                                    "edges": [
+                                        {"node": {"id": "v1", "sku": "6F2Y6936", "price": "142500000", "inventoryQuantity": 1}}
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/2",
+                                "title": "AIR KING (2025)",
+                                "status": "ACTIVE",
+                                "createdAt": "2026-10-23T08:15:30Z",
+                                "featuredImage": {"url": "https://example.com/cpo.jpg"},
+                                "variants": {
+                                    "edges": [
+                                        {"node": {"id": "v2", "sku": "CPO-231026-02", "price": "135000000", "inventoryQuantity": 1}}
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        with patch.object(flask_app, "get_shopify_token", return_value="fake_token"), \
+             patch("requests.post") as mock_post:
+            
+            mock_post_res = MagicMock()
+            mock_post_res.status_code = 200
+            mock_post_res.json.return_value = mock_gql_response
+            mock_post.return_value = mock_post_res
+
+            # Kasus 1: Gemini mendeteksi foto sebagai 'photo_owner'
+            gemini_owner = {
+                "brand": "Rolex",
+                "model": "Air King",
+                "photo_type": "photo_owner",
+                "search_query": "Rolex Air King"
+            }
+            res_owner = flask_app.find_active_watch_in_shopify(gemini_owner)
+            self.assertIsNotNone(res_owner)
+            # Harus memilih CPO-231026-02
+            self.assertEqual(res_owner["sku"], "CPO-231026-02")
+            self.assertEqual(res_owner["numeric_price"], 135000000.0)
+
+            # Kasus 2: Gemini mendeteksi foto sebagai 'photo_studio'
+            gemini_studio = {
+                "brand": "Rolex",
+                "model": "Air King",
+                "photo_type": "photo_studio",
+                "search_query": "Rolex Air King"
+            }
+            res_studio = flask_app.find_active_watch_in_shopify(gemini_studio)
+            self.assertIsNotNone(res_studio)
+            # Harus memilih 6F2Y6936
+            self.assertEqual(res_studio["sku"], "6F2Y6936")
+            self.assertEqual(res_studio["numeric_price"], 142500000.0)
+
+    def test_visual_verification_tie_breaker(self):
+        from unittest.mock import patch
+        import flask_app
+
+        # Dua kandidat dengan judul dan skor sama
+        cand_a = {"title": "AIR KING (2025)", "sku": "6F2Y6936", "image_url": "https://example.com/a.jpg"}
+        cand_b = {"title": "AIR KING (2025)", "sku": "CPO-231026-02", "image_url": "https://example.com/b.jpg"}
+
+        with patch.object(flask_app, "verify_watch_visually_with_gemini", return_value="B"), \
+             patch.object(flask_app, "get_shopify_token", return_value="fake_token"), \
+             patch("requests.post") as mock_post:
+
+            mock_post_res = MagicMock()
+            mock_post_res.status_code = 200
+            mock_post_res.json.return_value = {
+                "data": {
+                    "products": {
+                        "edges": [
+                            {"node": {"id": "1", "title": "AIR KING (2025)", "status": "ACTIVE", "createdAt": "2026-01-01T00:00:00Z", "featuredImage": {"url": "https://example.com/a.jpg"}, "variants": {"edges": [{"node": {"id": "v1", "sku": "6F2Y6936", "price": "142500000", "inventoryQuantity": 1}}]}}},
+                            {"node": {"id": "2", "title": "AIR KING (2025)", "status": "ACTIVE", "createdAt": "2026-01-01T00:00:00Z", "featuredImage": {"url": "https://example.com/b.jpg"}, "variants": {"edges": [{"node": {"id": "v2", "sku": "CPO-231026-02", "price": "135000000", "inventoryQuantity": 1}}]}}}
+                        ]
+                    }
+                }
+            }
+            mock_post.return_value = mock_post_res
+
+            # Tanpa photo_type tertentu tapi ada image_bytes
+            gemini_info = {
+                "brand": "Rolex",
+                "model": "Air King",
+                "_image_bytes": b"fake_inquiry_image"
+            }
+            res = flask_app.find_active_watch_in_shopify(gemini_info)
+            self.assertIsNotNone(res)
+            # Tie-breaker memilih B
+            self.assertEqual(res["sku"], "CPO-231026-02")
 
 if __name__ == "__main__":
     unittest.main()

@@ -469,7 +469,7 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info)
 def identify_watch_with_gemini(image_url=None, image_bytes=None):
     """
     Menganalisis foto jam tangan menggunakan Gemini Vision multimodal (gemini-3.1-flash-lite).
-    Mengekstrak merek, model/seri, dial color, reference number, dan query pencarian.
+    Mengekstrak merek, model/seri, dial color, reference number, query pencarian, serta photo_type (photo_owner vs photo_studio).
     """
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY tidak terkonfigurasi di environment.")
@@ -496,12 +496,15 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None):
             "Analyze this luxury wristwatch image carefully.\n"
             "Identify:\n"
             "1. Brand (e.g. Rolex, Patek Philippe, Audemars Piguet, Vacheron Constantin, Hublot, Jaeger-LeCoultre, Omega, Cartier, Panerai, etc.)\n"
-            "2. Model / Series / Collection (e.g. Historiques American 1921, Submariner Date, Royal Oak Offshore, Big Bang, Master Control Calendar, Santos, etc.)\n"
+            "2. Model / Series / Collection (e.g. Historiques American 1921, Submariner Date, Royal Oak Offshore, Air-King, Big Bang, Master Control Calendar, Santos, etc.)\n"
             "3. Dial color and key dial features (e.g. Silver, Black, Blue, Salmon, Skeleton, Diamond dial, etc.)\n"
-            "4. Reference number or case number if recognized or visible (e.g. 82035, 126610LN, 26470ST, or empty string if uncertain)\n"
-            "5. Search keywords string optimized for searching Shopify inventory (e.g. 'Historiques American 1921' or 'Submariner Date 126610LN')\n\n"
+            "4. Reference number or case number if recognized or visible (e.g. 82035, 126610LN, 126900, 26470ST, or empty string if uncertain)\n"
+            "5. Search keywords string optimized for searching Shopify inventory (e.g. 'Historiques American 1921', 'Air King', or 'Submariner Date 126610LN')\n"
+            "6. Photo setting type: Determine whether this image is 'photo_owner' or 'photo_studio':\n"
+            "   - 'photo_owner': Taken casually/informally by an owner or customer (e.g. resting on a cushion/pillow, bedsheet, sofa, cloth, car interior, desk/table, or wrist/hand).\n"
+            "   - 'photo_studio': Taken professionally in a photo studio/lightbox with a clean, seamless plain white or light grey background.\n\n"
             "Respond STRICTLY in JSON format with keys:\n"
-            "brand, model, dial_color, reference, search_query"
+            "brand, model, dial_color, reference, search_query, photo_type"
         )
 
         models_to_try = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash-lite"]
@@ -531,7 +534,8 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None):
                             clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
                             clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
                             parsed = json.loads(clean_json_str)
-                            print(f"🤖 Gemini Vision ({model_name}) berhasil mengidentifikasi: {parsed.get('brand')} - {parsed.get('model')}")
+                            parsed["_image_bytes"] = image_bytes
+                            print(f"🤖 Gemini Vision ({model_name}) berhasil mengidentifikasi: {parsed.get('brand')} - {parsed.get('model')} (Tipe Foto: {parsed.get('photo_type')})")
                             return parsed
                 else:
                     print(f"⚠️ Gemini Vision ({model_name}) HTTP {res.status_code}: {res.text[:120]}")
@@ -543,9 +547,102 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None):
 
     return None
 
+def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidate_b):
+    """
+    Multimodal visual verification tie-breaker when multiple top candidates match the same model/title.
+    Sends inquiry image + candidate A image + candidate B image to Gemini Vision to pick the best match.
+    Returns 'A', 'B', or None.
+    """
+    if not GEMINI_API_KEY or not inquiry_image_bytes:
+        return None
+
+    try:
+        url_a = candidate_a.get("image_url")
+        url_b = candidate_b.get("image_url")
+        if not url_a or not url_b:
+            return None
+
+        # Download featured image for candidate A & B (timeout 8s each)
+        try:
+            res_a = requests.get(url_a, timeout=8)
+            res_b = requests.get(url_b, timeout=8)
+            if res_a.status_code != 200 or res_b.status_code != 200:
+                print("⚠️ Gagal mengunduh gambar kandidat untuk verifikasi visual.")
+                return None
+        except Exception as dl_err:
+            print(f"⚠️ Exception unduh gambar kandidat: {dl_err}")
+            return None
+
+        b64_inquiry = base64.b64encode(inquiry_image_bytes).decode("utf-8")
+        b64_a = base64.b64encode(res_a.content).decode("utf-8")
+        b64_b = base64.b64encode(res_b.content).decode("utf-8")
+
+        prompt = (
+            "You are an expert luxury watch catalog matching assistant at IDWX.\n"
+            "You are given 3 images:\n"
+            "1. INQUIRY IMAGE: The watch photo sent by the user.\n"
+            "2. CANDIDATE A: Catalog photo for candidate A.\n"
+            "3. CANDIDATE B: Catalog photo for candidate B.\n\n"
+            "Compare the INQUIRY IMAGE closely with CANDIDATE A and CANDIDATE B.\n"
+            "Pay close attention to:\n"
+            "- Photo setting/background (e.g. pillow/cushion color/texture, bedsheet, studio lightbox plain background, lighting reflection).\n"
+            "- Exact dial features, numerals, hands position, bezel, bracelet/strap.\n"
+            "Determine which candidate (A or B) is the EXACT same catalog item or photo listing as the INQUIRY IMAGE.\n\n"
+            "Respond strictly in JSON format with keys:\n"
+            "\"winner\": \"A\" or \"B\",\n"
+            "\"confidence\": \"high\" or \"medium\" or \"low\",\n"
+            "\"reason\": \"brief explanation of visual similarities\"\n"
+        )
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"text": "INQUIRY IMAGE:"},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64_inquiry}},
+                    {"text": "CANDIDATE A:"},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64_a}},
+                    {"text": "CANDIDATE B:"},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64_b}}
+                ]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.1
+            }
+        }
+
+        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"]
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                res = requests.post(url, json=payload, timeout=20)
+                if res.status_code == 200:
+                    res_json = res.json()
+                    candidates = res_json.get("candidates", [])
+                    if candidates:
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
+                        clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
+                        parsed = json.loads(clean_json_str)
+                        winner = parsed.get("winner", "").strip().upper()
+                        print(f"👁️ Visual Verification ({model_name}): Pemenang '{winner}' (Confidence: {parsed.get('confidence')}, Alasan: {parsed.get('reason')})")
+                        if winner in ["A", "B"]:
+                            return winner
+                else:
+                    print(f"⚠️ Visual verification ({model_name}) HTTP {res.status_code}: {res.text[:120]}")
+            except Exception as m_err:
+                print(f"⚠️ Exception visual verification ({model_name}): {m_err}")
+
+    except Exception as e:
+        print(f"⚠️ Error verify_watch_visually_with_gemini: {e}")
+
+    return None
+
 def find_active_watch_in_shopify(gemini_info):
     """
     Mencari produk jam tangan AKTIF di Shopify yang paling sesuai dengan hasil analisis Gemini Vision.
+    Mendukung pembedaan Photo Owner vs Photo Studio, Recency, dan Verifikasi Visual Multimodal (Tie-Breaker).
     Mengembalikan dict dengan product_node, variant_node, sku, title, numeric_price, formatted_price.
     """
     token = get_shopify_token()
@@ -559,6 +656,8 @@ def find_active_watch_in_shopify(gemini_info):
     model = (gemini_info.get("model") or "").strip()
     ref = (gemini_info.get("reference") or "").strip()
     dial = (gemini_info.get("dial_color") or "").strip()
+    photo_type = (gemini_info.get("photo_type") or "").strip().lower()
+    inquiry_image_bytes = gemini_info.get("_image_bytes")
     query_str = (gemini_info.get("search_query") or f"{brand} {model}").strip()
 
     model_words = [w for w in re.split(r'[^A-Za-z0-9]+', model) if len(w) >= 3 and w.lower() not in ["watch", "automatic", "chronograph", "dial", "edition", "series"]]
@@ -618,7 +717,7 @@ def find_active_watch_in_shopify(gemini_info):
     """
 
     for q in candidate_search_queries:
-        if len(scored_candidates) >= 5:
+        if len(scored_candidates) >= 15:
             break
         try:
             res = requests.post(graphql_url, headers=headers, json={"query": search_gql, "variables": {"query": q}}, timeout=15)
@@ -654,6 +753,10 @@ def find_active_watch_in_shopify(gemini_info):
                     if ref and ref.upper() in title_upper:
                         score += 5000
 
+                    # Bonus kecocokan model persis di judul
+                    if model and model.upper() in title_upper:
+                        score += 2000
+
                     v_edges = p_node.get("variants", {}).get("edges", [])
                     chosen_variant = None
                     for v_edge in v_edges:
@@ -667,13 +770,48 @@ def find_active_watch_in_shopify(gemini_info):
                         chosen_variant = v_edges[0].get("node", {})
 
                     if chosen_variant and chosen_variant.get("sku"):
+                        chosen_sku = (chosen_variant.get("sku") or "").strip()
+                        is_cpo_sku = chosen_sku.upper().startswith("CPO")
+
+                        # Penyesuaian skor berdasarkan photo_type vs tipe SKU (CPO vs Reguler Studio)
+                        if photo_type == "photo_owner":
+                            if is_cpo_sku:
+                                score += 15000  # Memprioritaskan konsinyasi Photo Owner
+                            else:
+                                score -= 5000   # Penalti untuk stok studio jika foto dari owner
+                        elif photo_type == "photo_studio":
+                            if not is_cpo_sku:
+                                score += 8000   # Memprioritaskan stok studio reguler
+                            else:
+                                score -= 5000   # Penalti untuk CPO jika foto studio
+
+                        # Bonus tanggal listing terbaru (Recency)
+                        created_at_str = p_node.get("createdAt")
+                        if created_at_str:
+                            try:
+                                c_dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                                age_days = (datetime.now(timezone.utc) - c_dt).days
+                                if age_days <= 30:
+                                    score += 3000
+                                elif age_days <= 90:
+                                    score += 1500
+                                elif age_days <= 180:
+                                    score += 500
+                            except Exception:
+                                pass
+
+                        feat_img = p_node.get("featuredImage") or {}
+                        cand_img_url = feat_img.get("url")
+
                         scored_candidates.append({
                             "score": score,
                             "product_node": p_node,
                             "variant_node": chosen_variant,
-                            "sku": chosen_variant.get("sku", "").strip(),
+                            "sku": chosen_sku,
                             "title": p_node.get("title", "").strip(),
-                            "price": float(chosen_variant.get("price") or 0.0)
+                            "price": float(chosen_variant.get("price") or 0.0),
+                            "image_url": cand_img_url,
+                            "created_at": created_at_str
                         })
         except Exception as e:
             print(f"⚠️ Error search Shopify GraphQL with query '{q}': {e}")
@@ -682,6 +820,29 @@ def find_active_watch_in_shopify(gemini_info):
         return None
 
     scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Verifikasi Visual Multimodal (Tie-Breaker) jika 2 kandidat teratas sangat mirip atau bersaing ketat
+    if len(scored_candidates) >= 2 and inquiry_image_bytes:
+        top1 = scored_candidates[0]
+        top2 = scored_candidates[1]
+
+        # Syarat pemicu tie-breaker:
+        # 1. Judul produk sama persis (misal sama-sama "AIR KING (2025)"), ATAU
+        # 2. Selisih skor kurang dari 4000 poin
+        is_same_title = (top1["title"].strip().upper() == top2["title"].strip().upper())
+        is_close_score = abs(top1["score"] - top2["score"]) < 4000
+
+        if (is_same_title or is_close_score) and top1.get("image_url") and top2.get("image_url"):
+            print(f"🔍 Top 2 kandidat bersaing ketat: '{top1['title']}' ({top1['sku']}) skor {top1['score']} vs '{top2['title']}' ({top2['sku']}) skor {top2['score']}. Menjalankan verifikasi visual multimodal...")
+            winner = verify_watch_visually_with_gemini(inquiry_image_bytes, top1, top2)
+            if winner == "B":
+                print(f"🔄 Visual verification memilih Kandidat B ('{top2['title']}' SKU: {top2['sku']}) mengalahkan Kandidat A ('{top1['title']}' SKU: {top1['sku']})")
+                top2["score"] += 30000
+                scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+            elif winner == "A":
+                print(f"✅ Visual verification mengonfirmasi Kandidat A ('{top1['title']}' SKU: {top1['sku']})")
+                top1["score"] += 30000
+
     best = scored_candidates[0]
     print(f"🏆 Produk Shopify terbaik terpilih: '{best['title']}' (SKU: {best['sku']}) dengan skor: {best['score']}")
 
