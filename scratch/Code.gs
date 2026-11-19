@@ -26,6 +26,49 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     
     // ==============================================================
+    // 0. QUERY SKU (READ ONLY - PHOTO STUDIO / PHOTO OWNER)
+    // ==============================================================
+    if (data.action === "query_sku" || data.action === "find_sku") {
+      var targetSheetName = data.sheet_name || (data.sku && data.sku.toString().toUpperCase().indexOf("CPO") === 0 ? "PHOTO OWNER" : "PHOTO STUDIO");
+      var sheetQuery = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(targetSheetName);
+      if (!sheetQuery) {
+        return ContentService.createTextOutput(JSON.stringify({
+          "status": "error",
+          "message": "Tab '" + targetSheetName + "' tidak ditemukan."
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var skuQ = (data.sku || "").toString().trim().toLowerCase();
+      var baseSkuQ = skuQ.replace(/-\d+$/, '');
+      var valsQ = sheetQuery.getDataRange().getValues();
+      var foundRowQ = -1;
+      var foundStatusQ = "";
+      for (var i = valsQ.length - 1; i >= 1; i--) {
+        var skuValC = (valsQ[i][2] || "").toString().trim().toLowerCase();
+        var skuValG = (valsQ[i].length > 6 ? (valsQ[i][6] || "") : "").toString().trim().toLowerCase();
+        if (skuValC === skuQ || skuValC === baseSkuQ || skuValC.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '') ||
+            skuValG === skuQ || skuValG === baseSkuQ || skuValG.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '')) {
+          foundRowQ = i + 1;
+          foundStatusQ = (valsQ[i][0] || "").toString().trim();
+          break;
+        }
+      }
+      if (foundRowQ !== -1) {
+        return ContentService.createTextOutput(JSON.stringify({
+          "status": "success",
+          "tab_name": targetSheetName,
+          "row": foundRowQ,
+          "current_status": foundStatusQ
+        })).setMimeType(ContentService.MimeType.JSON);
+      } else {
+        return ContentService.createTextOutput(JSON.stringify({
+          "status": "not_found",
+          "tab_name": targetSheetName,
+          "message": "SKU tidak ditemukan di tab " + targetSheetName
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
+    // ==============================================================
     // 1. REPRICE / HARGA BARU / REPOST (TAB "PHOTO STUDIO" & "PHOTO OWNER")
     // ==============================================================
     if (data.action === "reprice_photo_studio" || data.action === "reprice_photo_owner" || data.action === "repost_consignment") {

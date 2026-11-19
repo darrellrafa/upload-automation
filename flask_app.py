@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import base64
 import html
 from html.parser import HTMLParser
 from collections import OrderedDict
@@ -147,6 +148,15 @@ GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "")
 GREEN_API_API_TOKEN = os.getenv("GREEN_API_API_TOKEN", "")
 TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "")
 
+# Gemini API Key & Vision Multimodal
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+# Memory Penyimpanan Jam Teridentifikasi Sementara (In-Memory Session dengan TTL)
+# Key: chat_id -> Value: dict {sku, title, formatted_price, numeric_price, sheet_info, timestamp}
+ACTIVE_IDENTIFIED_WATCHES = OrderedDict()
+MAX_ACTIVE_WATCHES = 100
+IDENTIFIED_WATCH_TTL = 1800  # 30 menit
+
 # Cache Token Shopify
 SHOPIFY_ACCESS_TOKEN = None
 SHOPIFY_TOKEN_EXPIRY = 0
@@ -221,11 +231,13 @@ def parse_price(price_str):
 def format_rupiah(num):
     return f"Rp {int(num):,}"
 
-def parse_reprice_chat(message_text):
+def parse_reprice_chat(message_text, fallback_sku=None):
     """
     Memvalidasi dan mengekstrak perintah chat:
     1. REPRICE / [KODE] / [HARGA]
     2. HARGA BARU / [KODE] / [HARGA]
+    3. REPRICE [KODE] [HARGA]
+    4. Format cepat dengan fallback_sku (misal: 'REPRICE 650JT' atau 'REPRICE Rp 650.000.000').
     Mendukung SKU yang mengandung karakter garis miring (misal Patek Philippe: 5720232/4642909).
     """
     if not message_text:
@@ -286,15 +298,33 @@ def parse_reprice_chat(message_text):
                 "formatted_price": format_rupiah(num_price)
             }
 
+    # Cara 4: Format Cepat jika menggunakan fallback_sku (misal balasan chat: 'REPRICE 650JT' atau 'REPRICE / 650JT')
+    if fallback_sku:
+        m_fallback = re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', message_text.strip(), re.IGNORECASE)
+        if m_fallback:
+            cmd_raw = m_fallback.group(1).upper()
+            price_raw = m_fallback.group(2).strip().lstrip('/:- \t')
+            num_price = parse_price(price_raw)
+            if num_price > 0:
+                c_type = "REPRICE" if "REPRICE" in cmd_raw else "HARGA_BARU"
+                return {
+                    "command_type": c_type,
+                    "code": clean_sku_string(fallback_sku).upper(),
+                    "raw_price": price_raw,
+                    "numeric_price": num_price,
+                    "formatted_price": format_rupiah(num_price)
+                }
+
     return None
 
-def parse_takedown_chat(message_text):
+def parse_takedown_chat(message_text, fallback_sku=None):
     """
     Memvalidasi dan mengekstrak perintah chat TAKEDOWN / SOLD / ON HOLD:
     Format yang didukung:
     1. TAKEDOWN / [KODE] (atau TAKE DOWN) -> status: Takedown
-    2. SOLD / [KODE] -> status: Sold
+    2. SOLD / [KODE] (atau LAKU) -> status: Sold
     3. ON HOLD / [KODE] (atau HOLD) -> status: On Hold
+    4. Format cepat: 'sold', 'laku', 'on hold', 'hold' dengan fallback_sku
     Mendukung SKU dengan karakter garis miring (misal 5720232/4642909).
     Bebas huruf besar/kecil (case-insensitive).
     """
@@ -302,7 +332,7 @@ def parse_takedown_chat(message_text):
         return None
 
     clean_text = message_text.strip()
-    m = re.match(r'^(takedown|take\s*down|sold|on\s*hold|on_hold|hold)\b\s*(.*)$', clean_text, re.IGNORECASE)
+    m = re.match(r'^(takedown|take\s*down|sold|laku|on\s*hold|on_hold|hold)\b\s*(.*)$', clean_text, re.IGNORECASE)
     if not m:
         return None
 
@@ -310,7 +340,7 @@ def parse_takedown_chat(message_text):
     if raw_keyword in ["takedown"]:
         cmd_type = "TAKEDOWN"
         status_text = "Takedown"
-    elif raw_keyword in ["sold"]:
+    elif raw_keyword in ["sold", "laku"]:
         cmd_type = "SOLD"
         status_text = "Sold"
     elif raw_keyword in ["onhold", "hold"]:
@@ -322,11 +352,23 @@ def parse_takedown_chat(message_text):
 
     rest = m.group(2).strip()
     if not rest:
+        if fallback_sku:
+            return {
+                "command_type": cmd_type,
+                "status_text": status_text,
+                "code": clean_sku_string(fallback_sku).upper()
+            }
         return None
 
     rest = rest.lstrip(':/- \t')
 
     if not rest:
+        if fallback_sku:
+            return {
+                "command_type": cmd_type,
+                "status_text": status_text,
+                "code": clean_sku_string(fallback_sku).upper()
+            }
         return None
 
     # Pisahkan jika ada pemisah ' / ' (misal: '5720232/4642909 / laku' atau '5720232 / 4642909')
@@ -343,13 +385,356 @@ def parse_takedown_chat(message_text):
 
     code = clean_sku_string(code).upper()
     if not code:
-        return None
+        if fallback_sku:
+            code = clean_sku_string(fallback_sku).upper()
+        else:
+            return None
 
     return {
         "command_type": cmd_type,
         "status_text": status_text,
         "code": code
     }
+
+def is_cancellation_chat(message_text):
+    """
+    Mengecek apakah pesan adalah perintah pembatalan / abaikan identifikasi jam tangan.
+    Contoh: 'abaikan', 'batal', 'cancel', 'skip', 'batalkan'.
+    """
+    if not message_text:
+        return False
+    norm = message_text.strip().lower()
+    return norm in ["abaikan", "batal", "batalkan", "cancel", "skip", "tidak", "batal.", "abaikan."]
+
+def extract_sku_from_quoted_message(quoted_msg):
+    """
+    Mengekstrak Kode / SKU dari pesan yang di-reply / quote di WhatsApp.
+    Contoh dalam quote: '🔢 *Kode / SKU:* 3012154' -> '3012154'
+    """
+    if not quoted_msg or not isinstance(quoted_msg, dict):
+        return None
+    raw_text = (
+        quoted_msg.get("textMessage") 
+        or quoted_msg.get("conversation") 
+        or (quoted_msg.get("extendedTextMessageData", {}) or {}).get("text") 
+        or ""
+    )
+    if not raw_text:
+        return None
+    m = re.search(r'(?:Kode\s*/\s*SKU|SKU|Kode)\s*:\*?\s*([A-Za-z0-9\-\/]+)', raw_text, re.IGNORECASE)
+    if m:
+        return clean_sku_string(m.group(1)).upper()
+    return None
+
+def format_watch_identification_message(title, sku, formatted_price, sheet_info):
+    """
+    Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'abaikan').
+    """
+    return (
+        f"⌚ *IDENTIFIKASI JAM TANGAN IDWX*\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📌 *Merek & Seri:* {title}\n"
+        f"🔢 *Kode / SKU:* {sku}\n"
+        f"💰 *Harga Saat Ini:* {formatted_price}\n"
+        f"📦 *Status:* AKTIF (Ready di Toko)\n"
+        f"📊 *Spreadsheet:* {sheet_info}\n\n"
+        f"👉 *Aksi Cepat (Balas pesan ini):*\n"
+        f"• Ketik *sold* untuk menandai laku\n"
+        f"• Ketik *on hold* untuk simpan/hold\n"
+        f"• Ketik *reprice [harga]* untuk ubah harga\n"
+        f"• Ketik *abaikan* / *batal* jika tidak ada tindakan"
+    )
+
+def identify_watch_with_gemini(image_url=None, image_bytes=None):
+    """
+    Menganalisis foto jam tangan menggunakan Gemini Vision multimodal (gemini-3.1-flash-lite).
+    Mengekstrak merek, model/seri, dial color, reference number, dan query pencarian.
+    """
+    if not GEMINI_API_KEY:
+        print("⚠️ GEMINI_API_KEY tidak terkonfigurasi di environment.")
+        return None
+
+    try:
+        if not image_bytes and image_url:
+            print(f"📥 Mengunduh gambar untuk analisis Gemini Vision dari: {image_url[:80]}...")
+            img_res = requests.get(image_url, timeout=20)
+            if img_res.status_code == 200:
+                image_bytes = img_res.content
+            else:
+                print(f"⚠️ Gagal mengunduh gambar: HTTP {img_res.status_code}")
+                return None
+
+        if not image_bytes:
+            print("⚠️ Data gambar kosong untuk analisis Gemini Vision.")
+            return None
+
+        b64_img = base64.b64encode(image_bytes).decode("utf-8")
+
+        prompt = (
+            "You are a luxury watch authentication and cataloging expert at IDWX.\n"
+            "Analyze this luxury wristwatch image carefully.\n"
+            "Identify:\n"
+            "1. Brand (e.g. Rolex, Patek Philippe, Audemars Piguet, Vacheron Constantin, Hublot, Jaeger-LeCoultre, Omega, Cartier, Panerai, etc.)\n"
+            "2. Model / Series / Collection (e.g. Historiques American 1921, Submariner Date, Royal Oak Offshore, Big Bang, Master Control Calendar, Santos, etc.)\n"
+            "3. Dial color and key dial features (e.g. Silver, Black, Blue, Salmon, Skeleton, Diamond dial, etc.)\n"
+            "4. Reference number or case number if recognized or visible (e.g. 82035, 126610LN, 26470ST, or empty string if uncertain)\n"
+            "5. Search keywords string optimized for searching Shopify inventory (e.g. 'Historiques American 1921' or 'Submariner Date 126610LN')\n\n"
+            "Respond STRICTLY in JSON format with keys:\n"
+            "brand, model, dial_color, reference, search_query"
+        )
+
+        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash-lite"]
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64_img}}
+                ]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.1
+            }
+        }
+
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                res = requests.post(url, json=payload, timeout=25)
+                if res.status_code == 200:
+                    res_json = res.json()
+                    candidates = res_json.get("candidates", [])
+                    if candidates:
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if raw_text:
+                            clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
+                            clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
+                            parsed = json.loads(clean_json_str)
+                            print(f"🤖 Gemini Vision ({model_name}) berhasil mengidentifikasi: {parsed.get('brand')} - {parsed.get('model')}")
+                            return parsed
+                else:
+                    print(f"⚠️ Gemini Vision ({model_name}) HTTP {res.status_code}: {res.text[:120]}")
+            except Exception as m_err:
+                print(f"⚠️ Exception memanggil Gemini ({model_name}): {m_err}")
+
+    except Exception as e:
+        print(f"❌ Error identify_watch_with_gemini: {e}")
+
+    return None
+
+def find_active_watch_in_shopify(gemini_info):
+    """
+    Mencari produk jam tangan AKTIF di Shopify yang paling sesuai dengan hasil analisis Gemini Vision.
+    Mengembalikan dict dengan product_node, variant_node, sku, title, numeric_price, formatted_price.
+    """
+    token = get_shopify_token()
+    if not token or not gemini_info:
+        return None
+
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    graphql_url = f"https://{SHOPIFY_STORE_NAME}.myshopify.com/admin/api/{API_VERSION}/graphql.json"
+
+    brand = (gemini_info.get("brand") or "").strip()
+    model = (gemini_info.get("model") or "").strip()
+    ref = (gemini_info.get("reference") or "").strip()
+    dial = (gemini_info.get("dial_color") or "").strip()
+    query_str = (gemini_info.get("search_query") or f"{brand} {model}").strip()
+
+    model_words = [w for w in re.split(r'[^A-Za-z0-9]+', model) if len(w) >= 3 and w.lower() not in ["watch", "automatic", "chronograph", "dial", "edition", "series"]]
+    brand_words = [w for w in re.split(r'[^A-Za-z0-9]+', brand) if len(w) >= 3]
+
+    candidate_search_queries = []
+
+    # 1. Query spesifik dengan referensi jika ada
+    if ref:
+        candidate_search_queries.append(f"status:active {ref}")
+
+    # 2. Query model unik (misal: "Historiques American 1921" atau "American 1921")
+    if len(model_words) >= 2:
+        candidate_search_queries.append(f"status:active {' '.join(model_words[:3])}")
+    if model_words:
+        candidate_search_queries.append(f"status:active {model_words[-1]}")
+        if len(model_words) > 1:
+            candidate_search_queries.append(f"status:active {model_words[0]}")
+
+    # 3. Query brand + model
+    if brand_words and model_words:
+        candidate_search_queries.append(f"status:active {brand_words[0]} {model_words[0]}")
+
+    # 4. Query search_query langsung
+    candidate_search_queries.append(f"status:active {query_str}")
+
+    seen_product_ids = set()
+    scored_candidates = []
+
+    search_gql = """
+    query searchProducts($query: String!) {
+      products(first: 20, query: $query) {
+        edges {
+          node {
+            id
+            title
+            descriptionHtml
+            status
+            createdAt
+            featuredImage {
+              url
+            }
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  sku
+                  price
+                  inventoryQuantity
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    for q in candidate_search_queries:
+        if len(scored_candidates) >= 5:
+            break
+        try:
+            res = requests.post(graphql_url, headers=headers, json={"query": search_gql, "variables": {"query": q}}, timeout=15)
+            if res.status_code == 200:
+                data = res.json().get("data", {}).get("products", {}).get("edges", [])
+                for edge in data:
+                    p_node = edge.get("node", {})
+                    p_id = p_node.get("id")
+                    if p_id in seen_product_ids:
+                        continue
+                    seen_product_ids.add(p_id)
+
+                    title_upper = (p_node.get("title") or "").upper()
+                    status_upper = (p_node.get("status") or "").upper()
+
+                    score = 0
+                    if status_upper == "ACTIVE":
+                        score += 5000
+                    elif status_upper == "DRAFT":
+                        score -= 2000
+
+                    for bw in brand_words:
+                        if bw.upper() in title_upper:
+                            score += 2000
+
+                    for mw in model_words:
+                        if mw.upper() in title_upper:
+                            score += 3000
+
+                    if dial and dial.upper() in title_upper:
+                        score += 1500
+
+                    if ref and ref.upper() in title_upper:
+                        score += 5000
+
+                    v_edges = p_node.get("variants", {}).get("edges", [])
+                    chosen_variant = None
+                    for v_edge in v_edges:
+                        vn = v_edge.get("node", {})
+                        if vn.get("sku"):
+                            chosen_variant = vn
+                            if (vn.get("inventoryQuantity") or 0) > 0:
+                                score += 1000
+                            break
+                    if not chosen_variant and v_edges:
+                        chosen_variant = v_edges[0].get("node", {})
+
+                    if chosen_variant and chosen_variant.get("sku"):
+                        scored_candidates.append({
+                            "score": score,
+                            "product_node": p_node,
+                            "variant_node": chosen_variant,
+                            "sku": chosen_variant.get("sku", "").strip(),
+                            "title": p_node.get("title", "").strip(),
+                            "price": float(chosen_variant.get("price") or 0.0)
+                        })
+        except Exception as e:
+            print(f"⚠️ Error search Shopify GraphQL with query '{q}': {e}")
+
+    if not scored_candidates:
+        return None
+
+    scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+    best = scored_candidates[0]
+    print(f"🏆 Produk Shopify terbaik terpilih: '{best['title']}' (SKU: {best['sku']}) dengan skor: {best['score']}")
+
+    return {
+        "product_node": best["product_node"],
+        "variant_node": best["variant_node"],
+        "sku": best["sku"],
+        "title": best["title"],
+        "numeric_price": best["price"],
+        "formatted_price": format_rupiah(best["price"])
+    }
+
+def resolve_watch_spreadsheet_location(sku, blogger_post=None):
+    """
+    Menentukan lokasi spreadsheet (Nama Tab & Nomor Baris) untuk jam tangan yang diidentifikasi.
+    Format yang dihasilkan: "ALL STOCK (Baris 313)" atau "PHOTO STUDIO (Baris 142)"
+    """
+    is_consign_ps = False
+    is_consign_po = False
+    is_featured = False
+
+    if blogger_post:
+        labels = blogger_post.get("labels", [])
+        is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in labels)
+        is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in labels) or sku.upper().startswith("CPO")
+        is_featured = any("FEATURED" in l.upper() for l in labels)
+
+    canonical_sku = clean_sku_string(sku).upper()
+
+    # 1. Jika terindikasi Consignment PO atau berawalan CPO
+    if is_consign_po or sku.upper().startswith("CPO"):
+        try:
+            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku}, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") == "success" and data.get("row"):
+                    return f"PHOTO OWNER (Baris {data.get('row')})"
+        except Exception as e:
+            print(f"⚠️ Error query consignment PO sheet: {e}")
+        return "PHOTO OWNER"
+
+    # 2. Jika terindikasi Consignment PS
+    if is_consign_ps:
+        try:
+            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku}, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("status") == "success" and data.get("row"):
+                    return f"PHOTO STUDIO (Baris {data.get('row')})"
+        except Exception as e:
+            print(f"⚠️ Error query consignment PS sheet: {e}")
+        return "PHOTO STUDIO"
+
+    # 3. Default atau FEATURED: Cek Spreadsheet Slow Moving (Tab ALL STOCK)
+    try:
+        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json={"action": "query_sku", "sku": canonical_sku, "canonical_sku": canonical_sku}, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("status") == "success" and data.get("row"):
+                return f"{data.get('tab_name', 'ALL STOCK')} (Baris {data.get('row')})"
+    except Exception as e:
+        print(f"⚠️ Error query slow moving sheet: {e}")
+
+    # Fallback cek Consignment PHOTO STUDIO jika di Slow Moving tidak terdata
+    try:
+        res_alt = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku}, timeout=15)
+        if res_alt.status_code == 200:
+            data_alt = res_alt.json()
+            if data_alt.get("status") == "success" and data_alt.get("row"):
+                return f"PHOTO STUDIO (Baris {data_alt.get('row')})"
+    except Exception:
+        pass
+
+    return "ALL STOCK"
 
 def parse_repost_chat(message_text):
     """
@@ -2491,6 +2876,7 @@ def wa_webhook():
         type_msg = message_data.get("typeMessage", "")
 
         image_url = ""
+        quoted_sku = None
 
         if type_msg == "imageMessage":
             file_data = message_data.get("fileMessageData", {})
@@ -2499,18 +2885,126 @@ def wa_webhook():
         elif type_msg == "textMessage":
             caption = message_data.get("textMessageData", {}).get("textMessage", "").strip()
         elif type_msg == "extendedTextMessage":
-            caption = message_data.get("extendedTextMessageData", {}).get("text", "").strip()
+            ext_data = message_data.get("extendedTextMessageData", {})
+            caption = ext_data.get("text", "").strip()
+            quoted_msg = ext_data.get("quotedMessage", {})
+            quoted_sku = extract_sku_from_quoted_message(quoted_msg)
         else:
             return jsonify({"status": "ignored", "reason": "Unsupported message type"}), 200
+
+        # ======================================================================
+        # JALUR 0: IDENTIFIKASI JAM TANGAN DARI FOTO (MULTIMODAL GEMINI VISION)
+        # ======================================================================
+        # Jika staff HANYA mengirim foto jam tangan tanpa teks caption sama sekali:
+        if type_msg == "imageMessage" and not caption:
+            if not image_url:
+                return jsonify({"status": "ignored", "reason": "Empty image URL"}), 200
+
+            print(f"📸 Menerima foto jam tangan tanpa teks dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
+            gemini_info = identify_watch_with_gemini(image_url=image_url)
+            if not gemini_info:
+                pesan_err = (
+                    "⚠️ *IDENTIFIKASI GAGAL*\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "Maaf, sistem tidak dapat mengidentifikasi jam tangan dari foto yang dikirimkan. Pastikan foto jam terlihat jelas pada bagian dial / merek."
+                )
+                kirim_balasan_wa(chat_id, pesan_err)
+                return jsonify({"status": "failed", "reason": "Gemini vision failed"}), 200
+
+            # Cari produk AKTIF yang cocok di Shopify
+            shopify_match = find_active_watch_in_shopify(gemini_info)
+            if not shopify_match:
+                pesan_err = (
+                    f"⚠️ *PRODUK TIDAK DITEMUKAN DI SHOPIFY*\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"Merek/Model terdeteksi: *{gemini_info.get('brand', '')} {gemini_info.get('model', '')}*\n"
+                    f"Namun tidak ditemukan produk aktif yang cocok di etalase toko Shopify."
+                )
+                kirim_balasan_wa(chat_id, pesan_err)
+                return jsonify({"status": "not_found", "gemini_info": gemini_info}), 200
+
+            matched_sku = shopify_match["sku"]
+            matched_title = shopify_match["title"]
+            formatted_price = shopify_match["formatted_price"]
+            numeric_price = shopify_match["numeric_price"]
+
+            # Cek Blogspot jika ada untuk label
+            service = get_blogger_service()
+            post = find_blogger_post_by_code(service, matched_sku) if service else None
+
+            # Tentukan lokasi spreadsheet (Tab & Nomor Baris)
+            sheet_info = resolve_watch_spreadsheet_location(matched_sku, blogger_post=post)
+
+            # Simpan ke sesi jam tangan aktif per chat_id
+            ACTIVE_IDENTIFIED_WATCHES[chat_id] = {
+                "sku": matched_sku,
+                "title": matched_title,
+                "formatted_price": formatted_price,
+                "numeric_price": numeric_price,
+                "sheet_info": sheet_info,
+                "timestamp": time.time()
+            }
+            if len(ACTIVE_IDENTIFIED_WATCHES) > MAX_ACTIVE_WATCHES:
+                ACTIVE_IDENTIFIED_WATCHES.popitem(last=False)
+
+            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk abaikan)
+            pesan_id = format_watch_identification_message(matched_title, matched_sku, formatted_price, sheet_info)
+            kirim_balasan_wa(chat_id, pesan_id)
+
+            return jsonify({
+                "status": "success",
+                "action": "identify_watch",
+                "gemini": gemini_info,
+                "shopify": shopify_match,
+                "sheet_info": sheet_info
+            }), 200
 
         if not caption:
             return jsonify({"status": "ignored", "reason": "Empty message"}), 200
 
         # ======================================================================
+        # JALUR PEMBATALAN / ABAIKAN IDENTIFIKASI
+        # ======================================================================
+        if is_cancellation_chat(caption):
+            last_watch = ACTIVE_IDENTIFIED_WATCHES.pop(chat_id, None)
+            if last_watch:
+                pesan_batal = (
+                    "❌ *Identifikasi jam tangan dibatalkan.*\n"
+                    f"Tidak ada perubahan yang dilakukan untuk *{last_watch.get('title', 'produk')}* (`{last_watch.get('sku', '')}`)."
+                )
+            else:
+                pesan_batal = "ℹ️ *Tidak ada sesi identifikasi jam tangan yang aktif.*"
+            kirim_balasan_wa(chat_id, pesan_batal)
+            return jsonify({"status": "cancelled", "watch": last_watch}), 200
+
+        # Resolusi fallback SKU dari quoted message atau sesi identifikasi aktif
+        fallback_sku = quoted_sku
+        if not fallback_sku and chat_id in ACTIVE_IDENTIFIED_WATCHES:
+            session = ACTIVE_IDENTIFIED_WATCHES.get(chat_id)
+            if session and (time.time() - session.get("timestamp", 0)) <= IDENTIFIED_WATCH_TTL:
+                fallback_sku = session.get("sku")
+
+        # Jika user mengirim foto dengan caption aksi langsung tanpa mengetik SKU (misal: foto + "sold", foto + "reprice 650jt"):
+        if type_msg == "imageMessage" and image_url and not fallback_sku:
+            is_action_caption = (
+                caption.lower().strip() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"]
+                or re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', caption.strip(), re.IGNORECASE)
+            )
+            if is_action_caption:
+                print(f"📸 Menerima foto dengan caption aksi '{caption}' dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
+                g_info = identify_watch_with_gemini(image_url=image_url)
+                if g_info:
+                    s_match = find_active_watch_in_shopify(g_info)
+                    if s_match and s_match.get("sku"):
+                        fallback_sku = s_match["sku"]
+                        print(f"✅ SKU otomatis teridentifikasi dari foto untuk aksi langsung: {fallback_sku}")
+
+        # ======================================================================
         # JALUR A: PERINTAH REPRICE / HARGA BARU
         # ======================================================================
-        reprice_cmd = parse_reprice_chat(caption)
+        reprice_cmd = parse_reprice_chat(caption, fallback_sku=fallback_sku)
         if reprice_cmd:
+            ACTIVE_IDENTIFIED_WATCHES.pop(chat_id, None)
             sku = reprice_cmd["code"]
             cmd_type = reprice_cmd["command_type"]
             formatted_price = reprice_cmd["formatted_price"]
@@ -2652,8 +3146,9 @@ def wa_webhook():
         # ======================================================================
         # JALUR B: PERINTAH TAKEDOWN / SOLD / ON HOLD
         # ======================================================================
-        takedown_cmd = parse_takedown_chat(caption)
+        takedown_cmd = parse_takedown_chat(caption, fallback_sku=fallback_sku)
         if takedown_cmd:
+            ACTIVE_IDENTIFIED_WATCHES.pop(chat_id, None)
             sku = takedown_cmd["code"]
             cmd_type = takedown_cmd["command_type"]
             status_text = takedown_cmd["status_text"]

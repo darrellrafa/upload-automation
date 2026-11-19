@@ -101,10 +101,11 @@ function doPost(e) {
     // =========================================================================
     // JALUR 1: REPRICE, HARGA BARU, ATAU UPDATE STATUS (HANYA TAB "ALL STOCK")
     // =========================================================================
+    var isQueryAction = (data.action === "query_sku" || data.action === "find_sku" || data.action === "get_sku_info");
     var isRepriceAction = (data.action === "reprice_slow_moving" || data.action === "reprice_featured");
     var isStatusAction = (data.action === "update_status_slow_moving" || data.action === "status_slow_moving" || data.action === "takedown_slow_moving" || data.action === "sold_slow_moving");
 
-    if (isRepriceAction || isStatusAction) {
+    if (isRepriceAction || isStatusAction || isQueryAction) {
       var ss = SpreadsheetApp.getActiveSpreadsheet();
 
       // TARGET MUTLAK: HANYA tab "ALL STOCK" (Tidak mencari di NEW ARRIVAL)
@@ -250,9 +251,9 @@ function doPost(e) {
         }
       }
 
-      // Jika tidak ada baris aktif yang cocok, namun ada baris berstatus SOLD yang cocok saat REPRICE:
-      // Gunakan baris SOLD tersebut (berarti jam aktif kembali dengan harga baru)
-      if (foundRow === -1 && foundSoldRow !== -1 && isRepriceAction) {
+      // Jika tidak ada baris aktif yang cocok, namun ada baris berstatus SOLD yang cocok saat REPRICE atau QUERY:
+      // Gunakan baris SOLD tersebut (berarti jam aktif kembali dengan harga baru atau ditemukan riwayatnya)
+      if (foundRow === -1 && foundSoldRow !== -1 && (isRepriceAction || isQueryAction)) {
         foundRow = foundSoldRow;
         var soldRowData = sheetValues[foundRow - 1];
         matchedCellSku = (mapping.colSerial > 0 ? soldRowData[mapping.colSerial - 1] : "") || "";
@@ -265,7 +266,25 @@ function doPost(e) {
       if (foundRow === -1) {
         return ContentService.createTextOutput(JSON.stringify({
           "status": "not_found",
+          "action": data.action,
+          "tab_name": currentSheet.getName(),
+          "sku": inputSku,
           "message": "SKU '" + data.sku + "' tidak ditemukan di tab ALL STOCK"
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      // JIKA INI AKSI QUERY BACA (READ-ONLY): LANGSUNG RETURN TANPA UBAH DATA APAPUN!
+      if (isQueryAction) {
+        return ContentService.createTextOutput(JSON.stringify({
+          "status": "success",
+          "action": "query_sku",
+          "tab_name": currentSheet.getName(),
+          "row": foundRow,
+          "sku": matchedCellSku || inputSku,
+          "brand": matchedBrand,
+          "description": matchedDesc,
+          "price": oldPriceVal,
+          "current_status": oldStatusVal
         })).setMimeType(ContentService.MimeType.JSON);
       }
 
@@ -334,6 +353,15 @@ function doPost(e) {
     // =========================================================================
     // JALUR 2: INPUT JAM BARU (Upload Otomatis Khusus Featured -> Tab "ALL STOCK")
     // =========================================================================
+    var isInsertAction = (data.action === "insert_featured" || data.action === "upload_featured" || data.action === "insert_draft" || !data.action);
+    if (!isInsertAction) {
+      return ContentService.createTextOutput(JSON.stringify({
+        "status": "ignored",
+        "action": data.action,
+        "message": "Aksi tidak dikenali: " + data.action
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     var targetTabName = "ALL STOCK";
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(targetTabName); 
     
