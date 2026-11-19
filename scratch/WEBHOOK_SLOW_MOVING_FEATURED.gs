@@ -3,7 +3,7 @@ function doGet(e) {
   var sheets = ss.getSheets().map(function(s) { return s.getName(); });
   return ContentService.createTextOutput(JSON.stringify({
     "status": "active",
-    "message": "Webhook Slow Moving Featured Apps Script is running",
+    "message": "Webhook Slow Moving Featured Apps Script is running (ALL STOCK ONLY)",
     "spreadsheet_name": ss.getName(),
     "available_tabs": sheets
   })).setMimeType(ContentService.MimeType.JSON);
@@ -21,12 +21,12 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
 
     // =========================================================================
-    // HELPER: PEMETAAN KOLOM (MAPPING) BERDASARKAN TAB & DETEKSI HEADER
+    // HELPER: PEMETAAN KOLOM (MAPPING) TAB "ALL STOCK" (13 KOLOM)
     // =========================================================================
     // Layout Tab "ALL STOCK" (13 Kolom: A s/d M):
     // Col A (1) : Indikator Warna Cyan (Kosong)
     // Col B (2) : DATE (Tanggal)
-    // Col C (3) : STATUS (DIBIARKAN TETAP KOSONG PADA SAAT UPLOAD!)
+    // Col C (3) : STATUS (DIBIARKAN TETAP KOSONG PADA SAAT UPLOAD JAM BARU!)
     // Col D (4) : NO (Nomor urut otomatis: 1, 2, 3...)
     // Col E (5) : OWNER (Nama Pemilik / Konsinyasi: AH, OMNI, ONELUXE, dll)
     // Col F (6) : BRAND (Merek: ROLEX, PATEK PHILIPPE, SEAMASTER, dll)
@@ -39,9 +39,6 @@ function doPost(e) {
     // Col M (13): LINK WEBSITE (URL Produk di Web dualtime.id)
     // =========================================================================
     function getSheetColumnMapping(sheet) {
-      var sheetName = sheet.getName();
-      var isAllStock = (sheetName === "ALL STOCK");
-
       // Default layout tab ALL STOCK
       var mapping = {
         headerRow: 1,
@@ -61,28 +58,6 @@ function doPost(e) {
         hasStatusCol: true,
         totalCols: 13
       };
-
-      if (!isAllStock) {
-        // Fallback untuk tab NEW ARRIVAL (Layout lama 10 kolom)
-        mapping = {
-          headerRow: 1,
-          colIndicator: -1,
-          colDate: 1,       // A
-          colStatus: -1,
-          colNo: -1,
-          colOwner: 2,      // B
-          colBrand: 3,      // C
-          colDesc: 4,       // D
-          colYear: 5,       // E
-          colCondition: 6,  // F
-          colPrice: 7,      // G
-          colReference: 8,  // H
-          colSerial: 9,     // I
-          colLink: 10,      // J
-          hasStatusCol: false,
-          totalCols: 10
-        };
-      }
 
       // Deteksi dinamis header baris 1 s/d 5 jika teks header tertera jelas
       var maxScanRows = Math.min(sheet.getLastRow(), 5);
@@ -121,7 +96,7 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // JALUR 1: REPRICE, HARGA BARU, ATAU UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
+    // JALUR 1: REPRICE, HARGA BARU, ATAU UPDATE STATUS (HANYA TAB "ALL STOCK")
     // =========================================================================
     var isRepriceAction = (data.action === "reprice_slow_moving" || data.action === "reprice_featured");
     var isStatusAction = (data.action === "update_status_slow_moving" || data.action === "status_slow_moving" || data.action === "takedown_slow_moving" || data.action === "sold_slow_moving");
@@ -129,20 +104,14 @@ function doPost(e) {
     if (isRepriceAction || isStatusAction) {
       var ss = SpreadsheetApp.getActiveSpreadsheet();
 
-      // Prioritas pencarian: Cek tab "ALL STOCK" terlebih dahulu, lalu "NEW ARRIVAL"
-      var targetTabNames = ["ALL STOCK", "NEW ARRIVAL"];
-      var candidateSheets = [];
-      for (var t = 0; t < targetTabNames.length; t++) {
-        var s = ss.getSheetByName(targetTabNames[t]);
-        if (s) {
-          candidateSheets.push(s);
-        }
-      }
+      // TARGET MUTLAK: HANYA tab "ALL STOCK" (Tidak mencari di NEW ARRIVAL)
+      var targetTabName = "ALL STOCK";
+      var currentSheet = ss.getSheetByName(targetTabName);
 
-      if (candidateSheets.length === 0) {
+      if (!currentSheet) {
         return ContentService.createTextOutput(JSON.stringify({
           "status": "error",
-          "message": "Tab 'ALL STOCK' maupun 'NEW ARRIVAL' tidak ditemukan di Spreadsheet ini."
+          "message": "Tab 'ALL STOCK' tidak ditemukan di Spreadsheet ini."
         })).setMimeType(ContentService.MimeType.JSON);
       }
 
@@ -156,151 +125,196 @@ function doPost(e) {
         }
       }
 
-      // Kumpulkan kandidat SKU (termasuk serial ganda dengan garis miring /)
+      // Kumpulkan kandidat SKU (exact, base SKU, slash parts)
       var searchTerms = [];
-      if (inputSku) searchTerms.push(inputSku);
-      if (canonicalSku && searchTerms.indexOf(canonicalSku) === -1) searchTerms.push(canonicalSku);
-
-      if (inputSku.indexOf('/') !== -1) {
-        var slashParts = inputSku.split('/');
-        for (var sp = 0; sp < slashParts.length; sp++) {
-          var partClean = slashParts[sp].trim();
-          if (partClean && searchTerms.indexOf(partClean) === -1) {
-            searchTerms.push(partClean);
+      function addSearchTerm(val) {
+        if (!val) return;
+        var s = val.toString().trim().toUpperCase();
+        if (s && searchTerms.indexOf(s) === -1) searchTerms.push(s);
+        var base = s.replace(/-\d+$/, '').trim();
+        if (base && searchTerms.indexOf(base) === -1) searchTerms.push(base);
+        if (s.indexOf('/') !== -1) {
+          var slashParts = s.split('/');
+          for (var sp = 0; sp < slashParts.length; sp++) {
+            var partClean = slashParts[sp].trim();
+            if (partClean && searchTerms.indexOf(partClean) === -1) searchTerms.push(partClean);
           }
         }
       }
+      addSearchTerm(inputSku);
+      addSearchTerm(canonicalSku);
 
-      var foundSheet = null;
+      var mapping = getSheetColumnMapping(currentSheet);
+      var sheetValues = currentSheet.getDataRange().getValues();
+
+      if (sheetValues.length <= mapping.headerRow) {
+        return ContentService.createTextOutput(JSON.stringify({
+          "status": "not_found",
+          "message": "Tab 'ALL STOCK' tidak memiliki baris data."
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+
       var foundRow = -1;
+      var foundSoldRow = -1; // Fallback jika baris berstatus SOLD namun ingin di-reprice
       var matchedCellSku = "";
       var matchedBrand = "";
       var matchedDesc = "";
       var oldPriceVal = "";
       var oldStatusVal = "";
-      var matchedMapping = null;
 
-      // Cari di tab ALL STOCK terlebih dahulu
-      for (var sIdx = 0; sIdx < candidateSheets.length; sIdx++) {
-        var currentSheet = candidateSheets[sIdx];
-        var mapping = getSheetColumnMapping(currentSheet);
-        var sheetValues = currentSheet.getDataRange().getValues();
-        if (sheetValues.length <= mapping.headerRow) continue;
+      // Loop data dari baris terakhir ke atas agar mencocokkan data paling mutakhir
+      for (var r = sheetValues.length - 1; r >= mapping.headerRow; r--) {
+        var rowData = sheetValues[r];
+        var statusCell = mapping.hasStatusCol && mapping.colStatus > 0 ? (rowData[mapping.colStatus - 1] || "").toString().trim().toUpperCase() : "";
+        var serialCell = mapping.colSerial > 0 ? (rowData[mapping.colSerial - 1] || "").toString().trim().toUpperCase() : "";
+        var refCell = mapping.colReference > 0 ? (rowData[mapping.colReference - 1] || "").toString().trim().toUpperCase() : "";
 
-        // Loop data dari baris terakhir ke atas agar mencocokkan data paling mutakhir
-        for (var r = sheetValues.length - 1; r >= mapping.headerRow; r--) {
-          var rowData = sheetValues[r];
-          var statusCell = mapping.hasStatusCol && mapping.colStatus > 0 ? (rowData[mapping.colStatus - 1] || "").toString().trim().toUpperCase() : "";
-          var serialCell = mapping.colSerial > 0 ? (rowData[mapping.colSerial - 1] || "").toString().trim().toUpperCase() : "";
+        var isMatch = false;
 
-          // Jika aksi adalah REPRICE, lewati yang statusnya sudah SOLD
-          if (isRepriceAction && statusCell === "SOLD") continue;
+        if (serialCell) {
+          // Level 1: Cocok persis
+          for (var st = 0; st < searchTerms.length; st++) {
+            if (serialCell === searchTerms[st]) {
+              isMatch = true;
+              break;
+            }
+          }
 
-          var isMatch = false;
-          if (serialCell) {
-            // Level 1: Cocok persis
-            for (var st = 0; st < searchTerms.length; st++) {
-              if (serialCell === searchTerms[st]) {
+          // Level 2: Base SKU match (counter varian seperti 3012154 vs 3012154-1)
+          if (!isMatch) {
+            var cellBase = serialCell.replace(/-\d+$/, '').trim();
+            for (var stB = 0; stB < searchTerms.length; stB++) {
+              var termBase = searchTerms[stB].replace(/-\d+$/, '').trim();
+              if (cellBase && termBase && cellBase === termBase) {
                 isMatch = true;
                 break;
               }
             }
+          }
 
-            // Level 2: Potongan garis miring (movement/case serial)
-            if (!isMatch && (serialCell.indexOf('/') !== -1 || inputSku.indexOf('/') !== -1)) {
-              var cellParts = serialCell.split('/');
-              for (var cp = 0; cp < cellParts.length; cp++) {
-                var cPart = cellParts[cp].trim();
-                for (var st2 = 0; st2 < searchTerms.length; st2++) {
-                  if (cPart && cPart === searchTerms[st2]) {
-                    isMatch = true;
-                    break;
-                  }
+          // Level 3: Potongan garis miring (movement/case serial)
+          if (!isMatch && (serialCell.indexOf('/') !== -1 || inputSku.indexOf('/') !== -1)) {
+            var cellParts = serialCell.split('/');
+            for (var cp = 0; cp < cellParts.length; cp++) {
+              var cPart = cellParts[cp].trim();
+              for (var st2 = 0; st2 < searchTerms.length; st2++) {
+                if (cPart && cPart === searchTerms[st2]) {
+                  isMatch = true;
+                  break;
                 }
-                if (isMatch) break;
               }
-            }
-
-            // Level 3: Normalized (abaikan spasi & simbol strip)
-            if (!isMatch) {
-              var normCell = serialCell.replace(/[^A-Z0-9]/g, "");
-              var normInput = inputSku.replace(/[^A-Z0-9]/g, "");
-              if (normCell && normCell === normInput) {
-                isMatch = true;
-              }
+              if (isMatch) break;
             }
           }
 
-          if (isMatch) {
-            foundSheet = currentSheet;
-            foundRow = r + 1;
-            matchedCellSku = serialCell;
-            matchedBrand = mapping.colBrand > 0 ? (rowData[mapping.colBrand - 1] || "").toString().trim() : "";
-            matchedDesc = mapping.colDesc > 0 ? (rowData[mapping.colDesc - 1] || "").toString().trim() : "";
-            oldPriceVal = mapping.colPrice > 0 ? (rowData[mapping.colPrice - 1] || "").toString().trim() : "";
-            oldStatusVal = statusCell;
-            matchedMapping = mapping;
-            break;
+          // Level 4: Normalized (abaikan spasi & simbol strip)
+          if (!isMatch) {
+            var normCell = serialCell.replace(/[^A-Z0-9]/g, "");
+            var normInput = inputSku.replace(/[^A-Z0-9]/g, "");
+            if (normCell && normInput && normCell === normInput) {
+              isMatch = true;
+            }
           }
         }
 
-        if (foundRow !== -1) {
-          break; // Stop jika sudah ketemu di tab prioritas pertama
+        // Fallback: jika Kolom Serial kosong / tidak cocok, coba cek Kolom Reference
+        if (!isMatch && refCell) {
+          for (var stR = 0; stR < searchTerms.length; stR++) {
+            if (refCell === searchTerms[stR]) {
+              isMatch = true;
+              break;
+            }
+          }
         }
+
+        if (isMatch) {
+          // Jika aksi adalah REPRICE dan baris ini berstatus SOLD:
+          // Simpan sebagai kandidat fallback (foundSoldRow), tetapi prioritaskan baris aktif jika ada
+          if (isRepriceAction && statusCell === "SOLD") {
+            if (foundSoldRow === -1) {
+              foundSoldRow = r + 1;
+            }
+            continue;
+          }
+
+          foundRow = r + 1;
+          matchedCellSku = serialCell || refCell;
+          matchedBrand = mapping.colBrand > 0 ? (rowData[mapping.colBrand - 1] || "").toString().trim() : "";
+          matchedDesc = mapping.colDesc > 0 ? (rowData[mapping.colDesc - 1] || "").toString().trim() : "";
+          oldPriceVal = mapping.colPrice > 0 ? (rowData[mapping.colPrice - 1] || "").toString().trim() : "";
+          oldStatusVal = statusCell;
+          break; // Temukan baris aktif terbaik dan hentikan pencarian
+        }
+      }
+
+      // Jika tidak ada baris aktif yang cocok, namun ada baris berstatus SOLD yang cocok saat REPRICE:
+      // Gunakan baris SOLD tersebut (berarti jam aktif kembali dengan harga baru)
+      if (foundRow === -1 && foundSoldRow !== -1 && isRepriceAction) {
+        foundRow = foundSoldRow;
+        var soldRowData = sheetValues[foundRow - 1];
+        matchedCellSku = (mapping.colSerial > 0 ? soldRowData[mapping.colSerial - 1] : "") || "";
+        matchedBrand = mapping.colBrand > 0 ? (soldRowData[mapping.colBrand - 1] || "").toString().trim() : "";
+        matchedDesc = mapping.colDesc > 0 ? (soldRowData[mapping.colDesc - 1] || "").toString().trim() : "";
+        oldPriceVal = mapping.colPrice > 0 ? (soldRowData[mapping.colPrice - 1] || "").toString().trim() : "";
+        oldStatusVal = "SOLD";
       }
 
       if (foundRow === -1) {
         return ContentService.createTextOutput(JSON.stringify({
           "status": "not_found",
-          "message": "SKU '" + data.sku + "' tidak ditemukan di tab ALL STOCK maupun NEW ARRIVAL" + (isRepriceAction ? " (atau berstatus SOLD)" : "")
+          "message": "SKU '" + data.sku + "' tidak ditemukan di tab ALL STOCK"
         })).setMimeType(ContentService.MimeType.JSON);
       }
 
       var newStatusApplied = oldStatusVal;
 
       // 1. Eksekusi jika Aksi REPRICE / HARGA BARU
-      if (isRepriceAction && matchedMapping) {
-        // CATATAN PENTING: Pada Spreadsheet Slow Moving (Tab ALL STOCK), TIDAK ADA kolom NOTES.
-        // Yang diubah langsung adalah nilai pada Kolom J (PRICE) dengan harga baru numerik.
-        if (matchedMapping.colPrice > 0 && numericPrice > 0) {
-          foundSheet.getRange(foundRow, matchedMapping.colPrice).setValue(numericPrice);
-          foundSheet.getRange(foundRow, matchedMapping.colPrice).setNumberFormat("#,##0");
+      if (isRepriceAction) {
+        // Pada Spreadsheet Slow Moving (Tab ALL STOCK):
+        // Update nilai pada Kolom J (PRICE) dengan format ribuan #,##0
+        if (mapping.colPrice > 0 && numericPrice > 0) {
+          currentSheet.getRange(foundRow, mapping.colPrice).setValue(numericPrice);
+          currentSheet.getRange(foundRow, mapping.colPrice).setNumberFormat("#,##0");
         }
 
         // Tulis "REPRICE" di Kolom C (STATUS) jika ada kolom STATUS
-        if (matchedMapping.hasStatusCol && matchedMapping.colStatus > 0 && data.command_type === "REPRICE") {
+        var rawCmdType = (data.command_type || "").toString().trim().toUpperCase();
+        if (mapping.hasStatusCol && mapping.colStatus > 0) {
           newStatusApplied = "REPRICE";
-          foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
+          currentSheet.getRange(foundRow, mapping.colStatus).setValue(newStatusApplied);
+        }
+
+        // Reset fill color merah (Kolom D sampai L) agar kembali normal karena jam aktif dijual kembali
+        try {
+          var startCol = 4; // Kolom D
+          var endCol = 12;  // Kolom L
+          var numCols = (endCol - startCol + 1); // 9 kolom (D s/d L)
+          currentSheet.getRange(foundRow, startCol, 1, numCols).setBackground(null);
+        } catch (eColor) {
+          // Abaikan jika gagal reset warna
         }
       }
 
       // 2. Eksekusi jika Aksi UPDATE STATUS (SOLD / ON HOLD / TAKEDOWN)
       var fillApplied = false;
-      if (isStatusAction && matchedMapping && matchedMapping.hasStatusCol && matchedMapping.colStatus > 0) {
+      if (isStatusAction && mapping.hasStatusCol && mapping.colStatus > 0) {
         newStatusApplied = (data.status_text || "SOLD").toString().trim().toUpperCase();
-        foundSheet.getRange(foundRow, matchedMapping.colStatus).setValue(newStatusApplied);
+        currentSheet.getRange(foundRow, mapping.colStatus).setValue(newStatusApplied);
 
         // Jika status SOLD atau ON HOLD pada tab ALL STOCK: Atur fill color Kolom D sampai L (kolom 4 s/d 12) menjadi merah
         if (newStatusApplied === "SOLD" || newStatusApplied === "ON HOLD" || newStatusApplied === "HOLD") {
           var startCol = 4; // Kolom D
           var endCol = 12;  // Kolom L
           var numCols = (endCol - startCol + 1); // 9 kolom (D, E, F, G, H, I, J, K, L)
-          if (foundSheet.getName() === "ALL STOCK") {
-            foundSheet.getRange(foundRow, startCol, 1, numCols).setBackground("#ea4335");
-            fillApplied = true;
-          } else {
-            var sCol = matchedMapping.colBrand > 0 ? matchedMapping.colBrand : 1;
-            var eCol = matchedMapping.colSerial > 0 ? matchedMapping.colSerial : foundSheet.getLastColumn();
-            foundSheet.getRange(foundRow, sCol, 1, (eCol - sCol + 1)).setBackground("#ea4335");
-            fillApplied = true;
-          }
+          currentSheet.getRange(foundRow, startCol, 1, numCols).setBackground("#ea4335");
+          fillApplied = true;
         }
       }
 
       return ContentService.createTextOutput(JSON.stringify({
         "status": "success",
         "action": data.action,
-        "tab_name": foundSheet.getName(),
+        "tab_name": currentSheet.getName(),
         "row": foundRow,
         "sku": matchedCellSku,
         "brand": matchedBrand,
@@ -315,21 +329,13 @@ function doPost(e) {
     }
 
     // =========================================================================
-    // JALUR 2: INPUT JAM BARU (Upload Otomatis Dari Blogspot -> Tab "ALL STOCK")
+    // JALUR 2: INPUT JAM BARU (Upload Otomatis Khusus Featured -> Tab "ALL STOCK")
     // =========================================================================
     var targetTabName = "ALL STOCK";
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(targetTabName); 
     
-    // Fallback otomatis ke NEW ARRIVAL jika tab ALL STOCK belum ada
     if (!sheet) {
-      sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("NEW ARRIVAL");
-      if (sheet) {
-        targetTabName = "NEW ARRIVAL";
-      }
-    }
-
-    if (!sheet) {
-      throw new Error("Tab 'ALL STOCK' maupun 'NEW ARRIVAL' tidak ditemukan di Spreadsheet ini.");
+      throw new Error("Tab 'ALL STOCK' tidak ditemukan di Spreadsheet ini.");
     }
 
     var mapping = getSheetColumnMapping(sheet);
@@ -354,14 +360,14 @@ function doPost(e) {
       }
     }
 
-    // Proteksi duplikasi: Jika serial_number sudah pernah ada di sheet, update baris tersebut
+    // Proteksi duplikasi: Jika serial_number sudah pernah ada di sheet ALL STOCK, update baris tersebut
     var existingRow = -1;
     var searchSerial = (data.serial_number || "").toString().trim().toUpperCase();
     if (searchSerial && mapping.colSerial > 0 && lastRow > 1) {
       var serialList = sheet.getRange(1, mapping.colSerial, lastRow, 1).getValues();
       for (var sRow = serialList.length - 1; sRow >= 1; sRow--) {
         var cellSerial = (serialList[sRow][0] || "").toString().trim().toUpperCase();
-        if (cellSerial === searchSerial) {
+        if (cellSerial === searchSerial || cellSerial.replace(/-\d+$/, '').trim() === searchSerial.replace(/-\d+$/, '').trim()) {
           existingRow = sRow + 1;
           break;
         }

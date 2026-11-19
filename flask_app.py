@@ -2322,10 +2322,10 @@ def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, 
     Mengirim perintah update harga ke Google Apps Script Spreadsheet 'Stock List Slow Moving Items'.
     Kriteria:
     - Hanya jika produk memiliki label FEATURED di Blogspot.
-    - Mencari di tab 'ALL STOCK' (prioritas) atau 'NEW ARRIVAL'.
+    - Mencari di tab 'ALL STOCK'.
     - Mencocokkan SKU / Serial Number di Kolom L (SERIAL NUMBER).
     - Memperbarui Harga langsung di Kolom J (PRICE) dengan harga baru (numerik format #,##0).
-    - Memperbarui Status di Kolom C (STATUS) menjadi 'REPRICE' (jika REPRICE).
+    - Memperbarui Status di Kolom C (STATUS) menjadi 'REPRICE'.
     (Catatan: Spreadsheet Slow Moving tidak memiliki kolom NOTES; harga langsung ditimpa di Kolom J).
     """
     payload = {
@@ -2351,9 +2351,9 @@ def update_slow_moving_sheet(sku, command_type, formatted_price, numeric_price, 
 def update_slow_moving_status_sheet(sku, status_text, canonical_sku=None):
     """
     Mengirim perintah update status (SOLD, ON HOLD, TAKEDOWN) ke Google Apps Script
-    Spreadsheet 'Stock List Slow Moving Items' (Tab 'ALL STOCK' / 'NEW ARRIVAL').
+    Spreadsheet 'Stock List Slow Moving Items' (Tab 'ALL STOCK').
     Kriteria:
-    - Hanya jika produk memiliki label FEATURED di Blogspot.
+    - Hanya jika produk memiliki label FEATURED di Blogspot (atau fallback pencarian).
     - Mengubah kolom STATUS menjadi status_text (misal 'SOLD', 'ON HOLD', 'TAKEDOWN').
     """
     clean_status = (status_text or "").strip().upper()
@@ -2515,7 +2515,7 @@ def wa_webhook():
             # 3c. Update Spreadsheet Slow Moving (HANYA jika FEATURED)
             sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
             if is_featured:
-                print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL)...")
+                print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (Tab ALL STOCK)...")
                 sheet_slow_moving_res = update_slow_moving_sheet(sku, cmd_type, formatted_price, numeric_price, canonical_sku=canonical_sku)
             else:
                 print(f"ℹ️ Produk '{sku}' BUKAN FEATURED.")
@@ -2657,7 +2657,7 @@ def wa_webhook():
                     print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO.")
 
                 if is_featured:
-                    print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (ALL STOCK / NEW ARRIVAL) status ke '{status_text}'...")
+                    print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (Tab ALL STOCK) status ke '{status_text}'...")
                     sheet_slow_moving_res = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
             else:
                 # KONDISI KHUSUS: Postingan Blogspot tidak ditemukan atau dibatalkan karena benturan merek

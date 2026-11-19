@@ -21,7 +21,7 @@ flowchart TD
         YT[("YouTube Channel\n(Shorts Unlisted)")]
         GS1[("Consignment Listing\n(Photo Studio & Owner)")]
         GS2[("History Foto Studio\n(Draft Tracking & Video Queue)")]
-        GS3[("Slow Moving Items\n(ALL STOCK & NEW ARRIVAL)")]
+        GS3[("Slow Moving Items\n(ALL STOCK)")]
     end
 
     subgraph Controller ["3. Live Webhook Controller"]
@@ -210,8 +210,7 @@ The automation communicates with three distinct Google Apps Script Webhooks:
 │   └── Tab 'History Foto Studio'  --> New watch draft logging & YouTube video rendering queue
 │
 └── 3. WEBHOOK_SLOW_MOVING_FEATURED (Spreadsheet: Stock List Slow Moving Items)
-    ├── Tab 'ALL STOCK' (Primary)  --> 13-column stock tracking, Col C empty on upload, Col D-L Red on SOLD
-    └── Tab 'NEW ARRIVAL' (Legacy) --> Fallback tab for older catalog schemas
+    └── Tab 'ALL STOCK' (Exclusive) --> 13-column stock tracking, Col C empty on upload, Col D-L Red on SOLD, Reprice updates Col J and resets fill
 ```
 
 ### Exact 13-Column Layout of Tab `ALL STOCK`

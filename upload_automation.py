@@ -1159,9 +1159,9 @@ def process_photo_studio(blogger_service, urls):
                 now = datetime.now(WIB)
                 sku_pencarian = base_sku if base_sku else sku
 
-                # 1. Kirim ke Spreadsheet Slow Moving (Khusus Featured)
+                # 1. Kirim ke Spreadsheet Slow Moving (Khusus Featured -> Tab ALL STOCK)
                 if is_featured:
-                    print(f"   ⭐ Item FEATURED. Mengirim data ke Spreadsheet Slow Moving...")
+                    print(f"   ⭐ Item FEATURED. Mengirim data ke Spreadsheet Slow Moving (Tab ALL STOCK)...")
                     try:
                         tanggal_hari_ini = now.strftime("%d/%m/%Y")
                         payload_featured = {
