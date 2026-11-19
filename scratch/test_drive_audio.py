@@ -21,7 +21,7 @@ creds = Credentials(
 )
 drive_service = build('drive', 'v3', credentials=creds)
 
-folder_id = "your_drive_audio_folder_id"
+folder_id = os.environ.get("DRIVE_AUDIO_FOLDER_ID", "your_drive_audio_folder_id")
 query = f"'{folder_id}' in parents and trashed = false"
 results = drive_service.files().list(
     q=query,

@@ -26,8 +26,7 @@ access_token = tok_data.get("access_token")
 print("Got access token:", bool(access_token))
 
 if access_token:
-    # List files in folder your_drive_audio_folder_id
-    folder_id = "your_drive_audio_folder_id"
+    folder_id = env.get("DRIVE_AUDIO_FOLDER_ID", "your_drive_audio_folder_id")
     headers = {"Authorization": f"Bearer {access_token}"}
     drive_res = requests.get(
         "https://www.googleapis.com/drive/v3/files",

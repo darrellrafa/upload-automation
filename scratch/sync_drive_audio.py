@@ -26,7 +26,7 @@ creds = Credentials(
 )
 drive_service = build('drive', 'v3', credentials=creds)
 
-DRIVE_AUDIO_FOLDER_ID = "your_drive_audio_folder_id"
+DRIVE_AUDIO_FOLDER_ID = env.get("DRIVE_AUDIO_FOLDER_ID", "your_drive_audio_folder_id")
 LOCAL_AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio_tracks")
 os.makedirs(LOCAL_AUDIO_DIR, exist_ok=True)
 

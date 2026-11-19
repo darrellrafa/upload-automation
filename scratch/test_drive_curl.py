@@ -23,7 +23,7 @@ tok_res = requests.post(
 access_token = tok_res.json().get("access_token")
 print("Token OK:", bool(access_token))
 
-folder_id = "your_drive_audio_folder_id"
+folder_id = env.get("DRIVE_AUDIO_FOLDER_ID", "your_drive_audio_folder_id")
 headers = {"Authorization": f"Bearer {access_token}"}
 r = requests.get(
     f"https://www.googleapis.com/drive/v3/files?q='{folder_id}'+in+parents+and+trashed=false&fields=files(id,name,size,mimeType)",
