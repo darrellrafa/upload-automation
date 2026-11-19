@@ -194,12 +194,12 @@ $$\text{Total Skor} = S_{\text{status}} + S_{\text{stok}} + S_{\text{base}} + S_
 
 ## 4. Panduan Setup & Deployment di PythonAnywhere
 
-Panduan ini ditujukan untuk akun PythonAnywhere (contoh domain: `your_username.pythonanywhere.com`).
+Panduan ini ditujukan untuk akun PythonAnywhere (contoh domain: `<username>.pythonanywhere.com`).
 
 ### 4.1. Struktur Direktori di Server
 
 ```text
-/home/your_username/
+/home/<username>/
 ├── upload-automation/               <-- Root direktori Git repository
 │   ├── .env                         <-- File environment berisi kredensial rahasia
 │   ├── flask_app.py                 <-- Entry point aplikasi web
@@ -220,7 +220,7 @@ Buka **Bash Console** di dashboard PythonAnywhere:
 
 ```bash
 # 1. Pindah ke direktori home
-cd /home/your_username
+cd /home/<username>
 
 # 2. Clone repository (jika baru pertama kali)
 git clone https://github.com/darrellrafa/upload-automation.git
@@ -237,10 +237,10 @@ pip install -r requirements.txt
 
 ### 4.3. Langkah 2: Konfigurasi File `.env`
 
-Buat atau edit file `.env` di dalam folder `/home/your_username/upload-automation/.env`:
+Buat atau edit file `.env` di dalam folder `/home/<username>/upload-automation/.env`:
 
 ```bash
-nano /home/your_username/upload-automation/.env
+nano /home/<username>/upload-automation/.env
 ```
 
 Isi dengan konfigurasi lengkap berikut:
@@ -277,10 +277,10 @@ Simpan dengan menekan `Ctrl + O`, lalu keluar dengan `Ctrl + X`.
    - Pilih opsi **Manual configuration (not Django)**.
    - Pilih versi Python: **Python 3.10**.
 3. Di halaman konfigurasi Web App:
-   - **Source code**: `/home/your_username/upload-automation`
-   - **Working directory**: `/home/your_username/upload-automation`
-   - **Virtualenv**: `/home/your_username/.virtualenvs/idwx_env`
-4. Buka file **WSGI configuration file** (klik tautan link `/var/www/your_username_pythonanywhere_com_wsgi.py`):
+   - **Source code**: `/home/<username>/upload-automation`
+   - **Working directory**: `/home/<username>/upload-automation`
+   - **Virtualenv**: `/home/<username>/.virtualenvs/idwx_env`
+4. Buka file **WSGI configuration file** (klik tautan link `/var/www/<username>_pythonanywhere_com_wsgi.py`):
    - Hapus semua isi bawaan template, ganti dengan kode berikut:
 
 ```python
@@ -288,7 +288,7 @@ import sys
 import os
 
 # 1. Daftarkan direktori kerja project ke system path
-project_home = '/home/your_username/upload-automation'
+project_home = '/home/<username>/upload-automation'
 if project_home not in sys.path:
     sys.path.insert(0, project_home)
 
@@ -301,7 +301,7 @@ from flask_app import app as application
 ```
 
 5. Klik tombol **Save** di pojok kanan atas file WSGI.
-6. Kembali ke tab **Web** dan klik tombol hijau besar: **Reload your_username.pythonanywhere.com**.
+6. Kembali ke tab **Web** dan klik tombol hijau besar: **Reload <username>.pythonanywhere.com**.
 
 ---
 
@@ -309,7 +309,7 @@ from flask_app import app as application
 
 1. Buka console Green-API instance Anda.
 2. Masuk ke menu **Webhook Settings**:
-   - **URL Webhook**: `https://your_username.pythonanywhere.com/webhook`
+   - **URL Webhook**: `https://<username>.pythonanywhere.com/webhook`
    - **Incoming Webhook**: Centang `incomingMessageReceived`
    - **Status Webhook**: Non-aktifkan atau biarkan (sudah ditangani secara sub-milidetik oleh fast-path).
 3. Simpan pengaturan. Coba kirim pesan WhatsApp:
@@ -328,7 +328,7 @@ Karena `upload_automation.py` dirancang untuk memonitor postingan baru setiap 5 
 1. Masuk ke tab **Tasks** di PythonAnywhere.
 2. Pada bagian **Always-on tasks**, masukkan perintah:
    ```bash
-   /home/your_username/.virtualenvs/idwx_env/bin/python /home/your_username/upload-automation/upload_automation.py
+   /home/<username>/.virtualenvs/idwx_env/bin/python /home/<username>/upload-automation/upload_automation.py
    ```
 3. Klik **Create**. PythonAnywhere akan menjaga proses tetap berjalan 24/7 dan me-restart otomatis jika terjadi restart server.
 
@@ -336,14 +336,14 @@ Karena `upload_automation.py` dirancang untuk memonitor postingan baru setiap 5 
 1. Masuk ke tab **Tasks**.
 2. Di bagian **Scheduled tasks**, buat jadwal harian (misal setiap pukul 09:00 UTC):
    ```bash
-   /home/your_username/.virtualenvs/idwx_env/bin/python /home/your_username/upload-automation/upload_automation.py
+   /home/<username>/.virtualenvs/idwx_env/bin/python /home/<username>/upload-automation/upload_automation.py
    ```
 
 #### Opsi C: Menjalankan via Screen / Background Console
 Buka Bash Console dan jalankan di background:
 ```bash
 workon idwx_env
-cd /home/your_username/upload-automation
+cd /home/<username>/upload-automation
 nohup python upload_automation.py > upload.log 2>&1 &
 ```
 
@@ -355,13 +355,13 @@ Setiap kali ada pembaruan kode di GitHub:
 
 ```bash
 # 1. Buka Bash Console di PythonAnywhere
-cd /home/your_username/upload-automation
+cd /home/<username>/upload-automation
 
 # 2. Tarik update terbaru dari repository
 git pull origin main
 
 # 3. Reload Web App (via API atau tombol Reload di tab Web)
-touch /var/www/your_username_pythonanywhere_com_wsgi.py
+touch /var/www/<username>_pythonanywhere_com_wsgi.py
 ```
 > [!TIP]
 > Perintah `touch /var/www/..._wsgi.py` secara otomatis memberi tahu server web PythonAnywhere untuk me-reload worker tanpa perlu membuka browser secara manual.

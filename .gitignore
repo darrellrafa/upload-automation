@@ -1,11 +1,32 @@
+# Environment & Secrets
 .env
 .env.*
-!.env.example
+.env.example
+
+# Internal Audit Reports
+*Audit*.md
+*audit*.md
+
+# Operational Data & State Tracking (Database Caches)
+processed_skus.json
+processed_urls.json
+pending_youtube_queue.json
+processed_*.json
+
+# Binary Documents (PDFs are generated artifacts; HTML sources are preserved)
+*.pdf
+
+# Python & Environment Artifacts
 __pycache__/
 *.pyc
 *.pyo
+*.log
 .ipynb_checkpoints/
+venv/
+.venv/
+
+# Media & Temporary Files
 temp_videos/
 bin/
 audio_tracks/
-.env.example
+downloaded_images/

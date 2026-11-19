@@ -284,7 +284,7 @@
     <div class="doc-subtitle">Cara Mudah Kelola Jam Masuk, Ganti Harga, Sold, On Hold, Takedown, Repost, &amp; Ambil Foto Lewat Chat</div>
     <div class="doc-meta">
       <span><strong>Koneksi Chat:</strong> Green-API WhatsApp</span>
-      <span><strong>Server Otomasi:</strong> PythonAnywhere Flask (Akun: <code>your_username</code> &bull; 3 Workers)</span>
+      <span><strong>Server Otomasi:</strong> PythonAnywhere Flask (Akun: <code>&lt;your-username&gt;</code> &bull; 3 Workers)</span>
       <span><strong>Terhubung ke:</strong> Shopify, Blogspot, &amp; Google Spreadsheets</span>
       <span><strong>Versi Panduan:</strong> November 2026</span>
     </div>
@@ -461,18 +461,18 @@ Size 41mm, Automatic Caliber T601
   <h3>A. Pengaturan Notifikasi di Console Green-API</h3>
   <div class="callout callout-danger">
     <strong>Penting untuk Admin — Matikan Webhook Status agar Server Tidak Kebanjiran Pesan:</strong><br>
-    1. Buka <a href="https://console.green-api.com/" target="_blank">Console Green-API</a> &rarr; Pilih Instance <code>your_instance_id</code>.<br>
+    1. Buka <a href="https://console.green-api.com/" target="_blank">Console Green-API</a> &rarr; Pilih Instance Anda (<code>&lt;your-instance-id&gt;</code>).<br>
     2. Masuk ke menu <strong>Notifications / Webhooks</strong>.<br>
     3. Pastikan <strong>HANYA</strong> mencentang: <code>Incoming messages and files</code> (pesan masuk dari user).<br>
     4. <strong>HILANGKAN CENTANG (Matikan):</strong> <code>Outgoing messages</code>, <code>Message status</code>, dan <code>Device status</code>.<br>
-    5. Masukkan URL Webhook: <code>https://your_username.pythonanywhere.com/wa-webhook</code>.
+    5. Masukkan URL Webhook: <code>https://&lt;your-username&gt;.pythonanywhere.com/wa-webhook</code>.
   </div>
 
   <h3>B. Cara Reload Web App di PythonAnywhere</h3>
   <ol>
-    <li>Login ke akun PythonAnywhere <code>your_username</code>.</li>
+    <li>Login ke akun PythonAnywhere Anda (<code>&lt;your-username&gt;</code>).</li>
     <li>Buka tab <strong>Web</strong>, pastikan pilihan <strong>Web Workers</strong> bernilai <strong>3</strong>.</li>
-    <li>Setiap kali ada file kode <code>flask_app.py</code> yang diperbarui, cukup klik tombol hijau besar: <strong>Reload your_username.pythonanywhere.com</strong>.</li>
+    <li>Setiap kali ada file kode <code>flask_app.py</code> yang diperbarui, cukup klik tombol hijau besar: <strong>Reload &lt;your-username&gt;.pythonanywhere.com</strong>.</li>
   </ol>
 
   <h2>6. Tanya Jawab &amp; Solusi Praktis (Troubleshooting)</h2>

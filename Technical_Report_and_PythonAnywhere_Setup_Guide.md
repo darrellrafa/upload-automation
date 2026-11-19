@@ -242,12 +242,12 @@ The automation communicates with three distinct Google Apps Script Webhooks:
 
 ## 5. PythonAnywhere Setup & Deployment Guide
 
-This guide applies to any standard PythonAnywhere account (example domain: `your_username.pythonanywhere.com`).
+This guide applies to any standard PythonAnywhere account (example domain: `<username>.pythonanywhere.com`).
 
 ### 5.1. Server Directory Structure
 
 ```text
-/home/your_username/
+/home/<username>/
 ├── upload-automation/               <-- Root Git repository directory
 │   ├── .env                         <-- Environment file containing secret credentials
 │   ├── flask_app.py                 <-- Web application entry point (WhatsApp bot)
@@ -268,7 +268,7 @@ Open a **Bash Console** in your PythonAnywhere dashboard:
 
 ```bash
 # 1. Navigate to home directory
-cd /home/your_username
+cd /home/<username>
 
 # 2. Clone the repository (first-time setup)
 git clone https://github.com/darrellrafa/upload-automation.git
@@ -285,10 +285,10 @@ pip install -r requirements.txt
 
 ### 5.3. Step 2: Configure Environment Variables (`.env`)
 
-Create or edit the `.env` file inside `/home/your_username/upload-automation/.env`:
+Create or edit the `.env` file inside `/home/<username>/upload-automation/.env`:
 
 ```bash
-nano /home/your_username/upload-automation/.env
+nano /home/<username>/upload-automation/.env
 ```
 
 Paste your configuration:
@@ -330,10 +330,10 @@ Save with `Ctrl + O`, then exit with `Ctrl + X`.
    - Choose **Manual configuration (not Django)**.
    - Select Python version: **Python 3.10**.
 3. On the Web configuration panel, set:
-   - **Source code**: `/home/your_username/upload-automation`
-   - **Working directory**: `/home/your_username/upload-automation`
-   - **Virtualenv**: `/home/your_username/.virtualenvs/idwx_env`
-4. Click to edit the **WSGI configuration file** (`/var/www/your_username_pythonanywhere_com_wsgi.py`):
+   - **Source code**: `/home/<username>/upload-automation`
+   - **Working directory**: `/home/<username>/upload-automation`
+   - **Virtualenv**: `/home/<username>/.virtualenvs/idwx_env`
+4. Click to edit the **WSGI configuration file** (`/var/www/<username>_pythonanywhere_com_wsgi.py`):
    - Replace the entire template contents with:
 
 ```python
@@ -341,7 +341,7 @@ import sys
 import os
 
 # 1. Register project root to sys.path
-project_home = '/home/your_username/upload-automation'
+project_home = '/home/<username>/upload-automation'
 if project_home not in sys.path:
     sys.path.insert(0, project_home)
 
@@ -354,7 +354,7 @@ from flask_app import app as application
 ```
 
 5. Click **Save** in the top-right corner.
-6. Return to the **Web** tab and click the green button: **Reload your_username.pythonanywhere.com**.
+6. Return to the **Web** tab and click the green button: **Reload <username>.pythonanywhere.com**.
 
 ---
 
@@ -362,7 +362,7 @@ from flask_app import app as application
 
 1. Open your Green-API instance dashboard.
 2. Navigate to **Webhook Settings**:
-   - **Webhook URL**: `https://your_username.pythonanywhere.com/webhook`
+   - **Webhook URL**: `https://<username>.pythonanywhere.com/webhook`
    - **Incoming Webhook**: Enable `incomingMessageReceived`.
    - **Outgoing / Status Webhook**: Disable or leave as is (safely handled by sub-millisecond fast-path).
 3. Save settings. Send a test message in your target WhatsApp group:
@@ -379,7 +379,7 @@ from flask_app import app as application
 1. Go to the **Tasks** tab.
 2. Under **Always-on tasks**, configure:
    ```bash
-   /home/your_username/.virtualenvs/idwx_env/bin/python /home/your_username/upload-automation/upload_automation.py
+   /home/<username>/.virtualenvs/idwx_env/bin/python /home/<username>/upload-automation/upload_automation.py
    ```
 3. Click **Create**. PythonAnywhere will supervise the process 24/7 and auto-restart it if an unexpected process termination occurs.
 
@@ -387,7 +387,7 @@ from flask_app import app as application
 From a Bash Console:
 ```bash
 workon idwx_env
-cd /home/your_username/upload-automation
+cd /home/<username>/upload-automation
 nohup python upload_automation.py > upload.log 2>&1 &
 ```
 
@@ -399,13 +399,13 @@ Whenever code updates are pushed to GitHub:
 
 ```bash
 # 1. Open Bash Console on PythonAnywhere
-cd /home/your_username/upload-automation
+cd /home/<username>/upload-automation
 
 # 2. Pull the latest commits
 git pull origin main
 
 # 3. Gracefully reload the WSGI worker without manual browser clicks
-touch /var/www/your_username_pythonanywhere_com_wsgi.py
+touch /var/www/<username>_pythonanywhere_com_wsgi.py
 ```
 
 ---
