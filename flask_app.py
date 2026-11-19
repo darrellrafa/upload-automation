@@ -904,6 +904,50 @@ def extract_takedown_description_from_post(post):
 
     return "\n".join(desc_lines)
 
+def extract_description_from_shopify_html(desc_html, title=""):
+    """
+    Mengekstrak teks deskripsi spesifikasi jam tangan dari descriptionHtml Shopify
+    ketika postingan Blogspot sudah tidak tersedia (misal sudah di Trash sejak On Hold).
+    """
+    if not desc_html:
+        return title or ""
+
+    clean_html = re.sub(r'<!--.*?-->', '', desc_html, flags=re.DOTALL)
+    soup = BeautifulSoup(clean_html, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for tag in soup.find_all(["div", "p", "li", "ul", "h1", "h2", "h3", "h4", "hr", "table", "tr"]):
+        tag.insert_before("\n")
+        tag.insert_after("\n")
+
+    raw_lines = [re.sub(r'[\xa0\s]+', ' ', line.strip()).strip() for line in soup.get_text().split("\n") if line.strip()]
+
+    stop_patterns = [
+        r'^assets?\b',
+        r'^order\s+received\b',
+        r'^form\b',
+        r'^notes?\b',
+        r'^nama\s*:',
+        r'^no\s*hp\s*:',
+        r'^instagram\s*:',
+        r'^[=\-_]{3,}$',
+        r'^https?://'
+    ]
+
+    desc_lines = []
+    for line in raw_lines:
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        if any(re.search(pat, clean_line, re.IGNORECASE) for pat in stop_patterns):
+            break
+        desc_lines.append(clean_line)
+
+    if not desc_lines:
+        return title or ""
+
+    return "\n".join(desc_lines)
+
 # ==============================================================================
 # 3. BLOGGER SERVICE & REPRICE LOGIC
 # ==============================================================================
@@ -1834,6 +1878,7 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
           node {
             id
             title
+            descriptionHtml
             status
             createdAt
             updatedAt
@@ -1874,6 +1919,7 @@ def find_shopify_product_and_variant(sku, blogger_post=None):
           node {
             id
             title
+            descriptionHtml
             status
             createdAt
             updatedAt
@@ -2564,7 +2610,8 @@ def wa_webhook():
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_ps_res.get('row', '-')}, {sheet_consign_ps_res.get('tracking_checked', '')})\n"
+                    tracking_info = f", {sheet_consign_ps_res.get('tracking_checked')}" if sheet_consign_ps_res.get('tracking_checked') else ""
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_ps_res.get('row', '-')}, Tab PHOTO STUDIO{tracking_info})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
@@ -2572,7 +2619,8 @@ def wa_webhook():
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_po_res.get('row', '-')}, {sheet_consign_po_res.get('tracking_checked', '')})\n"
+                    tracking_info = f", {sheet_consign_po_res.get('tracking_checked')}" if sheet_consign_po_res.get('tracking_checked') else ""
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_po_res.get('row', '-')}, Tab PHOTO OWNER{tracking_info})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
@@ -2580,7 +2628,7 @@ def wa_webhook():
                 status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_slow_icon} *Spreadsheet (Slow Moving):* "
                 if sheet_slow_moving_res.get("status") == "success":
-                    pesan_konfirmasi += f"Tercatat di baris {sheet_slow_moving_res.get('row', '-')} (Tab {sheet_slow_moving_res.get('tab_name', '-')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *REPRICE* (Baris {sheet_slow_moving_res.get('row', '-')}, Tab {sheet_slow_moving_res.get('tab_name', 'ALL STOCK')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
 
@@ -2739,27 +2787,30 @@ def wa_webhook():
                     f"   • Postingan Blogspot *TIDAK* dihapus demi keamanan.\n"
                 )
             elif blogger_res.get("already_in_trash"):
-                pesan_konfirmasi += f"✅ *Blogspot:* Sudah di Sampah (Trash) sebelumnya\n   • Judul: {blogger_res.get('post_title', '-')}\n"
+                pesan_konfirmasi += f"✅ *Blogspot:* Sudah di Sampah (Trash) sebelumnya\n   • Judul: {blogger_res.get('post_title', shopify_product_title or '-')}\n"
             elif blogger_res.get("status") == "success":
                 pesan_konfirmasi += f"✅ *Blogspot:* Dipindahkan ke Sampah (Trash)\n   • Judul: {blogger_res.get('post_title', '-')}\n"
                 if blogger_res.get("publish_date"):
                     pesan_konfirmasi += f"   • Publish Date: {blogger_res.get('publish_date')}\n"
             else:
-                pesan_konfirmasi += f"ℹ️ *Blogspot:* {blogger_res.get('message', 'Postingan tidak ditemukan / sudah tidak aktif')}\n"
+                if shopify_product_title:
+                    pesan_konfirmasi += f"✅ *Blogspot:* Sudah di Sampah (Trash) sebelumnya\n   • Judul: {shopify_product_title}\n"
+                else:
+                    pesan_konfirmasi += f"ℹ️ *Blogspot:* {blogger_res.get('message', 'Postingan tidak ditemukan / sudah tidak aktif')}\n"
 
-            # Status Spreadsheet Consignment
+            # Status Spreadsheet Consignment & Slow Moving
             if is_consign_ps:
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_ps_res.get('row', '-')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_ps_res.get('row', '-')}, Tab PHOTO STUDIO)\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
             elif is_consign_po:
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_po_res.get('row', '-')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_po_res.get('row', '-')}, Tab PHOTO OWNER)\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
@@ -2767,14 +2818,19 @@ def wa_webhook():
                 status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_slow_icon} *Spreadsheet (Slow Moving):* "
                 if sheet_slow_moving_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_slow_moving_res.get('row', '-')}, Tab {sheet_slow_moving_res.get('tab_name', '-')})\n"
+                    pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_slow_moving_res.get('row', '-')}, Tab {sheet_slow_moving_res.get('tab_name', 'ALL STOCK')})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
 
             if not is_consign_ps and not is_consign_po and not is_featured:
                 pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (SKU tidak ditemukan di Consignment maupun Slow Moving)\n"
 
-            if post_description and blogger_res.get("status") == "success":
+            # Resolusi deskripsi lengkap spesifikasi jam tangan (Blogspot / fallback Shopify)
+            if not post_description and shopify_res.get("product_node"):
+                shopify_desc_html = shopify_res["product_node"].get("descriptionHtml", "")
+                post_description = extract_description_from_shopify_html(shopify_desc_html, title=shopify_product_title)
+
+            if post_description:
                 pesan_konfirmasi += f"\n━━━━━━━━━━━━━━━━━━\n{post_description}\n"
 
             # 5. Resolusi foto produk (Prioritas Blogspot jika sukses -> Fallback Shopify -> Fallback Spreadsheet)
@@ -2871,7 +2927,8 @@ def wa_webhook():
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_ps_res.get('row', '-')}, {sheet_consign_ps_res.get('tracking_checked', '')})\n"
+                    tracking_info = f", {sheet_consign_ps_res.get('tracking_checked')}" if sheet_consign_ps_res.get('tracking_checked') else ""
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_ps_res.get('row', '-')}, Tab PHOTO STUDIO{tracking_info})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
@@ -2879,7 +2936,8 @@ def wa_webhook():
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
-                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_po_res.get('row', '-')}, {sheet_consign_po_res.get('tracking_checked', '')})\n"
+                    tracking_info = f", {sheet_consign_po_res.get('tracking_checked')}" if sheet_consign_po_res.get('tracking_checked') else ""
+                    pesan_konfirmasi += f"Status diubah ke *Reprice/post* (Baris {sheet_consign_po_res.get('row', '-')}, Tab PHOTO OWNER{tracking_info})\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
