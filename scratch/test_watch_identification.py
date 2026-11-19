@@ -20,12 +20,23 @@ from flask_app import (
     parse_reprice_chat,
     parse_takedown_chat,
     is_cancellation_chat,
+    is_chat_excluded_from_identification,
     extract_sku_from_quoted_message,
     format_watch_identification_message,
     ACTIVE_IDENTIFIED_WATCHES
 )
 
 class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
+    def test_excluded_group_for_identification(self):
+        # Harus diabaikan
+        self.assertTrue(is_chat_excluded_from_identification("62817626104-1627455181@g.us"))
+        self.assertTrue(is_chat_excluded_from_identification("62817626104-1627455181"))
+        self.assertTrue(is_chat_excluded_from_identification("62817626104-1627455181@c.us"))
+        # Grup lain tidak boleh diabaikan
+        self.assertFalse(is_chat_excluded_from_identification("120363000000000000@g.us"))
+        self.assertFalse(is_chat_excluded_from_identification("628120000000@c.us"))
+        self.assertFalse(is_chat_excluded_from_identification(None))
+
     def test_cancellation_chat(self):
         self.assertTrue(is_cancellation_chat("abaikan"))
         self.assertTrue(is_cancellation_chat("batal"))

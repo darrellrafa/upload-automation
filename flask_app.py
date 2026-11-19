@@ -148,6 +148,11 @@ GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "")
 GREEN_API_API_TOKEN = os.getenv("GREEN_API_API_TOKEN", "")
 TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID", "")
 
+# Group/Chat ID yang dikecualikan dari fitur Identifikasi Jam Tangan Otomatis (Gemini Vision)
+EXCLUDED_IDENTIFICATION_TARGETS = [
+    t.strip().lower() for t in os.getenv("EXCLUDED_IDENTIFICATION_TARGETS", "62817626104-1627455181@g.us, 62817626104-1627455181").split(",") if t.strip()
+]
+
 # Gemini API Key & Vision Multimodal
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
@@ -425,6 +430,22 @@ def extract_sku_from_quoted_message(quoted_msg):
     if m:
         return clean_sku_string(m.group(1)).upper()
     return None
+
+def is_chat_excluded_from_identification(chat_id):
+    """
+    Mengecek apakah chat_id berasal dari group/user yang dikecualikan dari fitur identifikasi jam tangan visual.
+    Contoh: Group Foto Studio (62817626104-1627455181@g.us) yang sering kirim foto jam baru.
+    """
+    if not chat_id:
+        return False
+    clean_id = chat_id.strip().lower()
+    base_id = clean_id.split("@")[0]
+    for ex in EXCLUDED_IDENTIFICATION_TARGETS:
+        ex_clean = ex.strip().lower()
+        ex_base = ex_clean.split("@")[0]
+        if clean_id == ex_clean or base_id == ex_base or ex_base in clean_id:
+            return True
+    return False
 
 def format_watch_identification_message(title, sku, formatted_price, sheet_info):
     """
@@ -2897,6 +2918,11 @@ def wa_webhook():
         # ======================================================================
         # Jika staff HANYA mengirim foto jam tangan tanpa teks caption sama sekali:
         if type_msg == "imageMessage" and not caption:
+            # Pengecekan grup/chat yang dikecualikan dari identifikasi visual (misal Group Foto Studio)
+            if is_chat_excluded_from_identification(chat_id):
+                print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual.")
+                return jsonify({"status": "ignored", "reason": "Excluded chat/group for watch identification"}), 200
+
             if not image_url:
                 return jsonify({"status": "ignored", "reason": "Empty image URL"}), 200
 
@@ -2985,7 +3011,7 @@ def wa_webhook():
                 fallback_sku = session.get("sku")
 
         # Jika user mengirim foto dengan caption aksi langsung tanpa mengetik SKU (misal: foto + "sold", foto + "reprice 650jt"):
-        if type_msg == "imageMessage" and image_url and not fallback_sku:
+        if type_msg == "imageMessage" and image_url and not fallback_sku and not is_chat_excluded_from_identification(chat_id):
             is_action_caption = (
                 caption.lower().strip() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"]
                 or re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', caption.strip(), re.IGNORECASE)

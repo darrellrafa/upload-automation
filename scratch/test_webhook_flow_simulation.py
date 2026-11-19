@@ -20,7 +20,7 @@ from flask_app import wa_webhook, ACTIVE_IDENTIFIED_WATCHES
 class TestWebhookFlowSimulation(unittest.TestCase):
     def setUp(self):
         ACTIVE_IDENTIFIED_WATCHES.clear()
-        flask_app.TARGET_GROUP_ID = "test-group@g.us"
+        flask_app.TARGET_GROUP_ID = "test-group@g.us, 62817626104-1627455181@g.us"
 
     @patch("flask_app.kirim_balasan_wa")
     @patch("flask_app.get_watch_photo_url")
@@ -157,6 +157,32 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertEqual(res.get("command"), "SOLD")
         self.assertEqual(res.get("sku"), "3012154")
         self.assertNotIn(chat_id, ACTIVE_IDENTIFIED_WATCHES)
+
+    @patch("flask_app.identify_watch_with_gemini")
+    def test_excluded_group_skips_identification(self, mock_gemini):
+        chat_id = "62817626104-1627455181@g.us"
+        photo_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-004",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "Staff Studio"
+            },
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": "https://example.com/watch.jpg",
+                    "caption": ""
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=photo_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "ignored")
+        self.assertEqual(res.get("reason"), "Excluded chat/group for watch identification")
+        mock_gemini.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
