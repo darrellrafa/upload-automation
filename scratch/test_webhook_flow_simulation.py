@@ -52,7 +52,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         }
         mock_sheet.return_value = "ALL STOCK (Baris 313)"
 
-        # 1. Staff sends watch photo without caption
+        # 1. Staff sends watch photo with "identifikasi" keyword
         photo_payload = {
             "typeWebhook": "incomingMessageReceived",
             "idMessage": "msg-001",
@@ -64,7 +64,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
                 "typeMessage": "imageMessage",
                 "fileMessageData": {
                     "downloadUrl": "https://example.com/watch.jpg",
-                    "caption": ""
+                    "caption": "identifikasi"
                 }
             }
         }
@@ -174,7 +174,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
                 "typeMessage": "imageMessage",
                 "fileMessageData": {
                     "downloadUrl": "https://example.com/watch.jpg",
-                    "caption": ""
+                    "caption": "identifikasi"
                 }
             }
         }
@@ -206,7 +206,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
                 "typeMessage": "imageMessage",
                 "fileMessageData": {
                     "downloadUrl": "https://example.com/studio_watch.jpg",
-                    "caption": "ROLEX SUBMARINER DATE 126610LN / F099153 / TITIP IDWX"
+                    "caption": "Lange 1 Time Zone, Aug 2008 / 172521 / Franky"
                 }
             }
         }
@@ -216,14 +216,14 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(res.get("status"), "success")
         self.assertIn("sheets_response", res)
-        # Pastikan Gemini Vision TIDAK dipanggil karena grup dikecualikan dari visual vision
+        # Pastikan Gemini Vision TIDAK dipanggil karena bukan perintah identifikasi
         mock_gemini.assert_not_called()
         # Pastikan request dikirim ke Apps Script History Foto Studio
         mock_post.assert_called_once()
         sent_payload = mock_post.call_args[1].get("json")
         self.assertEqual(sent_payload.get("action"), "insert_draft")
-        self.assertEqual(sent_payload.get("serial_number"), "F099153")
-        self.assertEqual(sent_payload.get("name_in_creative"), "ROLEX SUBMARINER DATE 126610LN / F099153 / TITIP IDWX")
+        self.assertEqual(sent_payload.get("serial_number"), "172521")
+        self.assertEqual(sent_payload.get("name_in_creative"), "Lange 1 Time Zone, Aug 2008 / 172521 / Franky")
 
     @patch("flask_app.kirim_balasan_wa")
     @patch("flask_app.get_blogger_service")
@@ -250,7 +250,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
             "variant_node": {"sku": "CPO-280826-03"}
         }
 
-        # Staff mengirim foto dengan caption "ready in bali"
+        # Staff mengirim foto dengan caption "identifikasi ready in bali"
         photo_payload = {
             "typeWebhook": "incomingMessageReceived",
             "idMessage": "msg-bali-01",
@@ -262,7 +262,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
                 "typeMessage": "imageMessage",
                 "fileMessageData": {
                     "downloadUrl": "https://example.com/bali_ym.jpg",
-                    "caption": "ready in bali"
+                    "caption": "identifikasi ready in bali"
                 }
             }
         }
@@ -274,7 +274,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertEqual(res.get("action"), "identify_watch")
 
         # find_active_watch_in_shopify harus dipanggil dengan user_caption="ready in bali"
-        mock_shopify.assert_called_with(mock_gemini.return_value, user_caption="ready in bali")
+        mock_shopify.assert_called_with(mock_gemini.return_value, user_caption="identifikasi ready in bali")
 
         # Pesan WA yang dikirimkan harus memuat status "Ready in Bali"
         mock_kirim_wa.assert_called()
@@ -334,6 +334,33 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("3012154", last_wa_msg)
         self.assertIn("Dylan Baru", last_wa_msg)
         self.assertIn("Spreadsheet (Slow Moving):* Dilewati", last_wa_msg)
+
+    @patch("flask_app.identify_watch_with_gemini")
+    def test_forwarded_photo_without_identifikasi_keyword_is_ignored(self, mock_gemini):
+        chat_id = "test-group@g.us"
+        # Forwarded photo atau foto kiriman staff tanpa kata kunci 'identifikasi'
+        photo_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-fwd-01",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "Dylan Baru"
+            },
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": "https://example.com/watch.jpg",
+                    "caption": "ready in bali"  # Tidak memuat kata 'identifikasi'
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=photo_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "ignored")
+        # Pastikan Gemini Vision TIDAK dipanggil karena tidak ada kata 'identifikasi'
+        mock_gemini.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

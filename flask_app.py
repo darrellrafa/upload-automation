@@ -483,6 +483,16 @@ def is_known_action_command(text):
         return True
     return False
 
+def is_identification_request(text):
+    """
+    Mengecek apakah caption pesan memuat keyword 'identifikasi' atau 'identify'
+    untuk memicu fitur Identifikasi Jam Tangan Visual IDWX multimodal Gemini Vision.
+    Format yang didukung: 'identifikasi', 'identifikasi [keterangan]', 'tolong identifikasi', 'identify', dsb.
+    """
+    if not text:
+        return False
+    return bool(re.search(r'\b(identifikasi|identify)\b', text.strip(), re.IGNORECASE))
+
 def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None):
     """
     Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'batal').
@@ -1239,7 +1249,7 @@ def is_valid_foto_studio_caption(caption, image_url):
     ignored_keywords = [
         "meeting", "briefing", "google meet", "zoom", "teams", "selamat pagi", "selamat siang",
         "selamat sore", "selamat malam", "terima kasih", "thank you", "jadwal", "agenda",
-        "video call", "joining info", "time zone", "reminder"
+        "video call", "joining info", "reminder"
     ]
     lower_text = clean_text.lower()
     for kw in ignored_keywords:
@@ -3288,26 +3298,21 @@ def wa_webhook():
         # ======================================================================
         # JALUR 0: IDENTIFIKASI JAM TANGAN DARI FOTO (MULTIMODAL GEMINI VISION)
         # ======================================================================
-        # Trigger jika staff mengirim foto jam tangan untuk identifikasi visual:
-        # - BUKAN chat/grup yang dikecualikan (misal Group Foto Studio)
-        # - BUKAN format input jam baru Foto Studio ([Nama Jam] / [SN])
-        # - Tanpa caption teks sama sekali, ATAU dengan caption deskriptif/lokasi yang BUKAN perintah aksi
-        is_foto_studio_input = is_valid_foto_studio_caption(caption, image_url)
-        is_excluded_from_vision = is_chat_excluded_from_identification(chat_id)
+        # Khusus memanggil fitur IDENTIFIKASI JAM TANGAN IDWX jika user melampirkan foto
+        # dan menyertakan kata kunci 'identifikasi' (atau 'identify') pada caption.
+        is_identifikasi_cmd = is_identification_request(caption)
 
-        if is_excluded_from_vision:
-            # Grup Foto Studio dikecualikan dari identifikasi visual Gemini.
-            # Jika user mengirim foto TANPA caption di grup ini, langsung abaikan.
-            # Namun jika melampirkan caption (draft jam baru / perintah aksi), lanjutkan ke jalur pemrosesan di bawah!
-            if type_msg == "imageMessage" and not caption:
-                print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual (Foto tanpa caption).")
+        if type_msg == "imageMessage" and is_identifikasi_cmd:
+            # Pengecekan grup/chat yang dikecualikan dari identifikasi visual (misal Group Foto Studio)
+            if is_chat_excluded_from_identification(chat_id):
+                print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual.")
                 return jsonify({"status": "ignored", "reason": "Excluded chat/group for watch identification"}), 200
-        elif type_msg == "imageMessage" and not is_foto_studio_input and (not caption or not is_known_action_command(caption)):
+
             if not image_url and not jpeg_thumbnail_b64:
                 return jsonify({"status": "ignored", "reason": "Empty image URL and thumbnail"}), 200
 
             caption_log = f" (caption: '{caption}')" if caption else ""
-            print(f"📸 Menerima foto jam tangan{caption_log} dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
+            print(f"📸 Menerima foto jam tangan dengan kata kunci identifikasi{caption_log} dari: {sender_name}. Menjalankan Gemini Vision...")
             gemini_info = identify_watch_with_gemini(
                 image_url=image_url,
                 jpeg_thumbnail=jpeg_thumbnail_b64,
