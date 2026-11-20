@@ -485,7 +485,7 @@ def is_known_action_command(text):
 
 def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None):
     """
-    Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'abaikan').
+    Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'batal').
     Mendukung status lokasi dinamis (misal: 'Ready di Toko' atau 'Ready in Bali').
     """
     status_str = f"AKTIF ({location})" if location else "AKTIF (Ready di Toko)"
@@ -501,7 +501,7 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info,
         f"• Ketik *sold* untuk menandai laku\n"
         f"• Ketik *on hold* untuk simpan/hold\n"
         f"• Ketik *reprice [harga]* untuk ubah harga\n"
-        f"• Ketik *abaikan* / *batal* jika tidak ada tindakan"
+        f"• Ketik *batal* jika tidak ada tindakan"
     )
 
 def identify_watch_with_gemini(image_url=None, image_bytes=None):

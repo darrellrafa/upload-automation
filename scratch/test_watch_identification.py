@@ -138,7 +138,7 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("• Ketik *sold* untuk menandai laku", msg)
         self.assertIn("• Ketik *on hold* untuk simpan/hold", msg)
         self.assertIn("• Ketik *reprice [harga]* untuk ubah harga", msg)
-        self.assertIn("• Ketik *abaikan* / *batal* jika tidak ada tindakan", msg)
+        self.assertIn("• Ketik *batal* jika tidak ada tindakan", msg)
 
     def test_find_active_watch_cpo_preference_for_photo_owner(self):
         from unittest.mock import patch

@@ -84,7 +84,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         last_wa_msg = mock_kirim_wa.call_args[0][1]
         self.assertIn("⌚ *IDENTIFIKASI JAM TANGAN IDWX*", last_wa_msg)
         self.assertIn("3012154", last_wa_msg)
-        self.assertIn("• Ketik *abaikan* / *batal* jika tidak ada tindakan", last_wa_msg)
+        self.assertIn("• Ketik *batal* jika tidak ada tindakan", last_wa_msg)
 
         # 2. Staff replies "abaikan"
         abaikan_payload = {
