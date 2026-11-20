@@ -447,17 +447,55 @@ def is_chat_excluded_from_identification(chat_id):
             return True
     return False
 
-def format_watch_identification_message(title, sku, formatted_price, sheet_info):
+def normalize_watch_model_title(title):
+    """
+    Menormalkan judul model jam tangan untuk perbandingan kesamaan model (tie-breaker):
+    - Menghapus tahun rilis dalam kurung seperti (2018), [2013], (2025), dsb.
+    - Menghapus karakter non-alphanumeric selain spasi.
+    - Mengubah ke huruf kapital dan memangkas spasi berlebih.
+    Contoh: 'YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)' -> 'YACHT MASTER II 44MM TWOTONE ROSEGOLD'
+    """
+    if not title:
+        return ""
+    clean = re.sub(r'[\(\[\{]\s*\d{4}\s*[\)\]\}]', '', title)
+    clean = re.sub(r'[^A-Za-z0-9]+', ' ', clean).strip().upper()
+    return clean
+
+def is_known_action_command(text):
+    """
+    Mengecek apakah teks merupakan perintah aksi (sold, hold, reprice, takedown, repost, abaikan/batal).
+    Jika True, pesan gambar tidak akan diarahkan ke identifikasi foto biasa melainkan ke handler aksi masing-masing.
+    """
+    if not text:
+        return False
+    t = text.strip()
+    if is_cancellation_chat(t):
+        return True
+    if t.lower() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"]:
+        return True
+    if re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', t, re.IGNORECASE):
+        return True
+    if parse_reprice_chat(t):
+        return True
+    if parse_takedown_chat(t):
+        return True
+    if parse_repost_chat(t):
+        return True
+    return False
+
+def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None):
     """
     Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'abaikan').
+    Mendukung status lokasi dinamis (misal: 'Ready di Toko' atau 'Ready in Bali').
     """
+    status_str = f"AKTIF ({location})" if location else "AKTIF (Ready di Toko)"
     return (
         f"⌚ *IDENTIFIKASI JAM TANGAN IDWX*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📌 *Merek & Seri:* {title}\n"
         f"🔢 *Kode / SKU:* {sku}\n"
         f"💰 *Harga Saat Ini:* {formatted_price}\n"
-        f"📦 *Status:* AKTIF (Ready di Toko)\n"
+        f"📦 *Status:* {status_str}\n"
         f"📊 *Spreadsheet:* {sheet_info}\n\n"
         f"👉 *Aksi Cepat (Balas pesan ini):*\n"
         f"• Ketik *sold* untuk menandai laku\n"
@@ -639,11 +677,12 @@ def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidat
 
     return None
 
-def find_active_watch_in_shopify(gemini_info):
+def find_active_watch_in_shopify(gemini_info, user_caption=""):
     """
     Mencari produk jam tangan AKTIF di Shopify yang paling sesuai dengan hasil analisis Gemini Vision.
-    Mendukung pembedaan Photo Owner vs Photo Studio, Recency, dan Verifikasi Visual Multimodal (Tie-Breaker).
-    Mengembalikan dict dengan product_node, variant_node, sku, title, numeric_price, formatted_price.
+    Mendukung pembedaan Photo Owner vs Photo Studio, Recency, Filter/Tag Lokasi (misal Ready in Bali),
+    dan Verifikasi Visual Multimodal (Tie-Breaker).
+    Mengembalikan dict dengan product_node, variant_node, sku, title, numeric_price, formatted_price, location.
     """
     token = get_shopify_token()
     if not token or not gemini_info:
@@ -659,11 +698,16 @@ def find_active_watch_in_shopify(gemini_info):
     photo_type = (gemini_info.get("photo_type") or "").strip().lower()
     inquiry_image_bytes = gemini_info.get("_image_bytes")
     query_str = (gemini_info.get("search_query") or f"{brand} {model}").strip()
+    is_caption_bali = "bali" in (user_caption or "").lower()
 
     model_words = [w for w in re.split(r'[^A-Za-z0-9]+', model) if len(w) >= 3 and w.lower() not in ["watch", "automatic", "chronograph", "dial", "edition", "series"]]
     brand_words = [w for w in re.split(r'[^A-Za-z0-9]+', brand) if len(w) >= 3]
 
     candidate_search_queries = []
+
+    # Jika caption user mengandung kata bali, prioritaskan pencarian dengan kata bali
+    if is_caption_bali and model_words:
+        candidate_search_queries.append(f"status:active {' '.join(model_words[:2])} bali")
 
     # 1. Query spesifik dengan referensi jika ada
     if ref:
@@ -694,6 +738,7 @@ def find_active_watch_in_shopify(gemini_info):
           node {
             id
             title
+            tags
             descriptionHtml
             status
             createdAt
@@ -732,6 +777,14 @@ def find_active_watch_in_shopify(gemini_info):
 
                     title_upper = (p_node.get("title") or "").upper()
                     status_upper = (p_node.get("status") or "").upper()
+                    raw_tags = p_node.get("tags") or []
+                    if isinstance(raw_tags, str):
+                        raw_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+                    tags_list = [str(t).strip() for t in raw_tags if str(t).strip()]
+
+                    # Cek apakah produk memiliki label / tag Ready in Bali
+                    is_candidate_bali = any("bali" in t.lower() for t in tags_list) or "bali" in title_upper.lower()
+                    product_location = "Ready in Bali" if is_candidate_bali else "Ready di Toko"
 
                     score = 0
                     if status_upper == "ACTIVE":
@@ -757,6 +810,13 @@ def find_active_watch_in_shopify(gemini_info):
                     if model and model.upper() in title_upper:
                         score += 2000
 
+                    # Penyesuaian lokasi jika user menyebut bali di caption
+                    if is_caption_bali:
+                        if is_candidate_bali:
+                            score += 25000  # Prioritas sangat tinggi jika caption menyebut bali dan produk bertag bali
+                        else:
+                            score -= 10000  # Penalti untuk produk non-bali jika user spesifik menyebut bali
+
                     v_edges = p_node.get("variants", {}).get("edges", [])
                     chosen_variant = None
                     for v_edge in v_edges:
@@ -781,9 +841,9 @@ def find_active_watch_in_shopify(gemini_info):
                                 score -= 5000   # Penalti untuk stok studio jika foto dari owner
                         elif photo_type == "photo_studio":
                             if not is_cpo_sku:
-                                score += 8000   # Memprioritaskan stok studio reguler
-                            else:
-                                score -= 5000   # Penalti untuk CPO jika foto studio
+                                score += 2000   # Sedikit prioritas untuk stok studio reguler
+                            # CATATAN: Jangan beri penalti negatif pada CPO karena jam tangan CPO (misal titipan owner / stok Bali)
+                            # seringkali difoto secara profesional di atas stand jam (studio setting).
 
                         # Bonus tanggal listing terbaru (Recency)
                         created_at_str = p_node.get("createdAt")
@@ -811,7 +871,9 @@ def find_active_watch_in_shopify(gemini_info):
                             "title": p_node.get("title", "").strip(),
                             "price": float(chosen_variant.get("price") or 0.0),
                             "image_url": cand_img_url,
-                            "created_at": created_at_str
+                            "created_at": created_at_str,
+                            "location": product_location,
+                            "tags": tags_list
                         })
         except Exception as e:
             print(f"⚠️ Error search Shopify GraphQL with query '{q}': {e}")
@@ -826,13 +888,17 @@ def find_active_watch_in_shopify(gemini_info):
         top1 = scored_candidates[0]
         top2 = scored_candidates[1]
 
-        # Syarat pemicu tie-breaker:
-        # 1. Judul produk sama persis (misal sama-sama "AIR KING (2025)"), ATAU
-        # 2. Selisih skor kurang dari 4000 poin
-        is_same_title = (top1["title"].strip().upper() == top2["title"].strip().upper())
-        is_close_score = abs(top1["score"] - top2["score"]) < 4000
+        # Normalisasi judul model (menghapus tahun rilis seperti (2018), (2013), dsb.)
+        norm1 = normalize_watch_model_title(top1["title"])
+        norm2 = normalize_watch_model_title(top2["title"])
 
-        if (is_same_title or is_close_score) and top1.get("image_url") and top2.get("image_url"):
+        # Syarat pemicu tie-breaker:
+        # 1. Model jam tangan sama persis setelah normalisasi (misal: "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)" vs "(2013)"), ATAU
+        # 2. Selisih skor kurang dari 12000 poin
+        is_same_model = bool(norm1 and norm2 and norm1 == norm2)
+        is_close_score = abs(top1["score"] - top2["score"]) < 12000
+
+        if (is_same_model or is_close_score) and top1.get("image_url") and top2.get("image_url"):
             print(f"🔍 Top 2 kandidat bersaing ketat: '{top1['title']}' ({top1['sku']}) skor {top1['score']} vs '{top2['title']}' ({top2['sku']}) skor {top2['score']}. Menjalankan verifikasi visual multimodal...")
             winner = verify_watch_visually_with_gemini(inquiry_image_bytes, top1, top2)
             if winner == "B":
@@ -852,7 +918,8 @@ def find_active_watch_in_shopify(gemini_info):
         "sku": best["sku"],
         "title": best["title"],
         "numeric_price": best["price"],
-        "formatted_price": format_rupiah(best["price"])
+        "formatted_price": format_rupiah(best["price"]),
+        "location": best.get("location", "Ready di Toko")
     }
 
 def resolve_watch_spreadsheet_location(sku, blogger_post=None):
@@ -3077,8 +3144,10 @@ def wa_webhook():
         # ======================================================================
         # JALUR 0: IDENTIFIKASI JAM TANGAN DARI FOTO (MULTIMODAL GEMINI VISION)
         # ======================================================================
-        # Jika staff HANYA mengirim foto jam tangan tanpa teks caption sama sekali:
-        if type_msg == "imageMessage" and not caption:
+        # Trigger jika staff mengirim foto jam tangan:
+        # - Tanpa caption teks sama sekali, ATAU
+        # - Dengan caption deskriptif / filter lokasi yang BUKAN perintah aksi (misal: "ready in bali", "bali", "cek stok")
+        if type_msg == "imageMessage" and (not caption or not is_known_action_command(caption)):
             # Pengecekan grup/chat yang dikecualikan dari identifikasi visual (misal Group Foto Studio)
             if is_chat_excluded_from_identification(chat_id):
                 print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual.")
@@ -3087,7 +3156,8 @@ def wa_webhook():
             if not image_url:
                 return jsonify({"status": "ignored", "reason": "Empty image URL"}), 200
 
-            print(f"📸 Menerima foto jam tangan tanpa teks dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
+            caption_log = f" (caption: '{caption}')" if caption else ""
+            print(f"📸 Menerima foto jam tangan{caption_log} dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
             gemini_info = identify_watch_with_gemini(image_url=image_url)
             if not gemini_info:
                 pesan_err = (
@@ -3098,8 +3168,8 @@ def wa_webhook():
                 kirim_balasan_wa(chat_id, pesan_err)
                 return jsonify({"status": "failed", "reason": "Gemini vision failed"}), 200
 
-            # Cari produk AKTIF yang cocok di Shopify
-            shopify_match = find_active_watch_in_shopify(gemini_info)
+            # Cari produk AKTIF yang cocok di Shopify, dengan konteks caption user jika ada
+            shopify_match = find_active_watch_in_shopify(gemini_info, user_caption=caption)
             if not shopify_match:
                 pesan_err = (
                     f"⚠️ *PRODUK TIDAK DITEMUKAN DI SHOPIFY*\n"
@@ -3114,6 +3184,7 @@ def wa_webhook():
             matched_title = shopify_match["title"]
             formatted_price = shopify_match["formatted_price"]
             numeric_price = shopify_match["numeric_price"]
+            matched_location = shopify_match.get("location", "Ready di Toko")
 
             # Cek Blogspot jika ada untuk label
             service = get_blogger_service()
@@ -3129,13 +3200,14 @@ def wa_webhook():
                 "formatted_price": formatted_price,
                 "numeric_price": numeric_price,
                 "sheet_info": sheet_info,
+                "location": matched_location,
                 "timestamp": time.time()
             }
             if len(ACTIVE_IDENTIFIED_WATCHES) > MAX_ACTIVE_WATCHES:
                 ACTIVE_IDENTIFIED_WATCHES.popitem(last=False)
 
-            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk abaikan)
-            pesan_id = format_watch_identification_message(matched_title, matched_sku, formatted_price, sheet_info)
+            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk status lokasi dinamis)
+            pesan_id = format_watch_identification_message(matched_title, matched_sku, formatted_price, sheet_info, location=matched_location)
             kirim_balasan_wa(chat_id, pesan_id)
 
             return jsonify({
@@ -3181,7 +3253,7 @@ def wa_webhook():
                 print(f"📸 Menerima foto dengan caption aksi '{caption}' dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
                 g_info = identify_watch_with_gemini(image_url=image_url)
                 if g_info:
-                    s_match = find_active_watch_in_shopify(g_info)
+                    s_match = find_active_watch_in_shopify(g_info, user_caption=caption)
                     if s_match and s_match.get("sku"):
                         fallback_sku = s_match["sku"]
                         print(f"✅ SKU otomatis teridentifikasi dari foto untuk aksi langsung: {fallback_sku}")

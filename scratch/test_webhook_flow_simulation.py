@@ -186,5 +186,63 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertEqual(res.get("reason"), "Excluded chat/group for watch identification")
         mock_gemini.assert_not_called()
 
+    @patch("flask_app.kirim_balasan_wa")
+    @patch("flask_app.get_blogger_service")
+    @patch("flask_app.resolve_watch_spreadsheet_location")
+    @patch("flask_app.find_active_watch_in_shopify")
+    @patch("flask_app.identify_watch_with_gemini")
+    def test_photo_identification_with_bali_caption(self, mock_gemini, mock_shopify, mock_sheet, mock_blog, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        mock_blog.return_value = None
+        mock_sheet.return_value = "PHOTO OWNER (Baris 52)"
+
+        mock_gemini.return_value = {
+            "brand": "Rolex",
+            "model": "Yacht-Master II 44mm Twotone Rosegold",
+            "search_query": "Rolex Yacht-Master II"
+        }
+        mock_shopify.return_value = {
+            "title": "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)",
+            "sku": "CPO-280826-03",
+            "numeric_price": 359000000.0,
+            "formatted_price": "Rp 359,000,000",
+            "location": "Ready in Bali",
+            "product_node": {"id": "101", "title": "YACHT-MASTER II"},
+            "variant_node": {"sku": "CPO-280826-03"}
+        }
+
+        # Staff mengirim foto dengan caption "ready in bali"
+        photo_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-bali-01",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "Staff Bali"
+            },
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": "https://example.com/bali_ym.jpg",
+                    "caption": "ready in bali"
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=photo_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "success")
+        self.assertEqual(res.get("action"), "identify_watch")
+
+        # find_active_watch_in_shopify harus dipanggil dengan user_caption="ready in bali"
+        mock_shopify.assert_called_with(mock_gemini.return_value, user_caption="ready in bali")
+
+        # Pesan WA yang dikirimkan harus memuat status "Ready in Bali"
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("📦 *Status:* AKTIF (Ready in Bali)", last_wa_msg)
+        self.assertIn("CPO-280826-03", last_wa_msg)
+        self.assertIn("Rp 359,000,000", last_wa_msg)
+
 if __name__ == "__main__":
     unittest.main()

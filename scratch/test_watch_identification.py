@@ -25,6 +25,8 @@ from flask_app import (
     is_chat_excluded_from_identification,
     extract_sku_from_quoted_message,
     format_watch_identification_message,
+    normalize_watch_model_title,
+    is_known_action_command,
     ACTIVE_IDENTIFIED_WATCHES
 )
 
@@ -250,6 +252,152 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             self.assertIsNotNone(res)
             # Tie-breaker memilih B
             self.assertEqual(res["sku"], "CPO-231026-02")
+
+    def test_normalize_watch_model_title(self):
+        t1 = "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)"
+        t2 = "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2013)"
+        norm1 = normalize_watch_model_title(t1)
+        norm2 = normalize_watch_model_title(t2)
+        self.assertEqual(norm1, norm2)
+        self.assertEqual(norm1, "YACHT MASTER II 44MM TWOTONE ROSEGOLD")
+
+        a1 = "AIR KING (2025)"
+        a2 = "AIR KING (2023)"
+        self.assertEqual(normalize_watch_model_title(a1), normalize_watch_model_title(a2))
+        self.assertEqual(normalize_watch_model_title(a1), "AIR KING")
+
+    def test_is_known_action_command(self):
+        # Bukan action command (harus masuk ke identifikasi foto jam)
+        self.assertFalse(is_known_action_command(""))
+        self.assertFalse(is_known_action_command(None))
+        self.assertFalse(is_known_action_command("ready in bali"))
+        self.assertFalse(is_known_action_command("bali"))
+        self.assertFalse(is_known_action_command("cek barang ini dong"))
+        self.assertFalse(is_known_action_command("stok bali masih ada?"))
+
+        # Merupakan action command (harus diarahkan ke action handler)
+        self.assertTrue(is_known_action_command("sold"))
+        self.assertTrue(is_known_action_command("laku"))
+        self.assertTrue(is_known_action_command("on hold"))
+        self.assertTrue(is_known_action_command("hold"))
+        self.assertTrue(is_known_action_command("reprice 350jt"))
+        self.assertTrue(is_known_action_command("harga baru 280.000.000"))
+        self.assertTrue(is_known_action_command("abaikan"))
+        self.assertTrue(is_known_action_command("batal"))
+        self.assertTrue(is_known_action_command("cancel"))
+
+    def test_location_status_formatting(self):
+        # Default tanpa location
+        msg_default = format_watch_identification_message(
+            title="YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2013)",
+            sku="363273X6",
+            formatted_price="Rp 280,000,000",
+            sheet_info="PHOTO STUDIO (Baris 2760)"
+        )
+        self.assertIn("📦 *Status:* AKTIF (Ready di Toko)", msg_default)
+
+        # Dengan lokasi Bali
+        msg_bali = format_watch_identification_message(
+            title="YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)",
+            sku="CPO-280826-03",
+            formatted_price="Rp 359,000,000",
+            sheet_info="PHOTO OWNER (Baris 52)",
+            location="Ready in Bali"
+        )
+        self.assertIn("📦 *Status:* AKTIF (Ready in Bali)", msg_bali)
+
+    def test_yacht_master_bali_detection_and_tie_breaker(self):
+        from unittest.mock import patch
+        import flask_app
+
+        mock_gql_response = {
+            "data": {
+                "products": {
+                    "edges": [
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/101",
+                                "title": "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)",
+                                "tags": ["__label:Ready In Bali", "TitipOwner"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-08-28T10:00:00Z",
+                                "featuredImage": {"url": "https://example.com/bali_ym2.jpg"},
+                                "variants": {
+                                    "edges": [
+                                        {"node": {"id": "v101", "sku": "CPO-280826-03", "price": "359000000", "inventoryQuantity": 1}}
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/102",
+                                "title": "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2013)",
+                                "tags": ["TitipIDWX"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-05-10T10:00:00Z",
+                                "featuredImage": {"url": "https://example.com/studio_ym2.jpg"},
+                                "variants": {
+                                    "edges": [
+                                        {"node": {"id": "v102", "sku": "363273X6", "price": "280000000", "inventoryQuantity": 1}}
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        # Skenario 1: User mengirim foto dengan caption "ready in bali"
+        with patch.object(flask_app, "get_shopify_token", return_value="fake_token"), \
+             patch("requests.post") as mock_post:
+            
+            mock_post_res = MagicMock()
+            mock_post_res.status_code = 200
+            mock_post_res.json.return_value = mock_gql_response
+            mock_post.return_value = mock_post_res
+
+            gemini_info = {
+                "brand": "Rolex",
+                "model": "Yacht-Master II 44mm Twotone Rosegold",
+                "photo_type": "photo_studio",
+                "search_query": "Rolex Yacht-Master II"
+            }
+            res_caption = flask_app.find_active_watch_in_shopify(gemini_info, user_caption="ready in bali")
+            self.assertIsNotNone(res_caption)
+            self.assertEqual(res_caption["sku"], "CPO-280826-03")
+            self.assertEqual(res_caption["title"], "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)")
+            self.assertEqual(res_caption["location"], "Ready in Bali")
+            self.assertEqual(res_caption["numeric_price"], 359000000.0)
+
+        # Skenario 2: User mengirim HANYA foto (tanpa caption), tapi foto studio
+        # Pemicu tie-breaker harus aktif karena model sama setelah normalisasi,
+        # dan CPO di photo_studio tidak lagi terkena penalti artifisial -5000.
+        # Kandidat A (top1) = 363273X6 (skor 25000), Kandidat B (top2) = CPO-280826-03 (skor 24500).
+        # Verifikasi visual Gemini membandingkan foto dan memilih pemenang 'B' (karena foto inquiry cocok dengan listing CPO Bali).
+        with patch.object(flask_app, "get_shopify_token", return_value="fake_token"), \
+             patch.object(flask_app, "verify_watch_visually_with_gemini", return_value="B") as mock_visual, \
+             patch("requests.post") as mock_post:
+
+            mock_post_res = MagicMock()
+            mock_post_res.status_code = 200
+            mock_post_res.json.return_value = mock_gql_response
+            mock_post.return_value = mock_post_res
+
+            gemini_info_photo_only = {
+                "brand": "Rolex",
+                "model": "Yacht-Master II 44mm Twotone Rosegold",
+                "photo_type": "photo_studio",
+                "search_query": "Rolex Yacht-Master II",
+                "_image_bytes": b"real_inquiry_photo_bytes"
+            }
+            res_photo_only = flask_app.find_active_watch_in_shopify(gemini_info_photo_only, user_caption="")
+            self.assertIsNotNone(res_photo_only)
+            # Tie-breaker visual terpanggil dan memilih kandidat A (Bali 2018)
+            self.assertTrue(mock_visual.called)
+            self.assertEqual(res_photo_only["sku"], "CPO-280826-03")
+            self.assertEqual(res_photo_only["location"], "Ready in Bali")
 
 if __name__ == "__main__":
     unittest.main()
