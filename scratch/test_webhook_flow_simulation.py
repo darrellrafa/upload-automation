@@ -186,6 +186,45 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertEqual(res.get("reason"), "Excluded chat/group for watch identification")
         mock_gemini.assert_not_called()
 
+    @patch("requests.post")
+    @patch("flask_app.identify_watch_with_gemini")
+    def test_excluded_group_still_processes_photo_studio_draft(self, mock_gemini, mock_post):
+        chat_id = "62817626104-1627455181@g.us"
+        mock_post_res = MagicMock()
+        mock_post_res.status_code = 200
+        mock_post_res.json.return_value = {"status": "success", "row": 150}
+        mock_post.return_value = mock_post_res
+
+        photo_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-studio-001",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "DUALTIME | BANG TOMMY"
+            },
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": "https://example.com/studio_watch.jpg",
+                    "caption": "ROLEX SUBMARINER DATE 126610LN / F099153 / TITIP IDWX"
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=photo_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "success")
+        self.assertIn("sheets_response", res)
+        # Pastikan Gemini Vision TIDAK dipanggil karena grup dikecualikan dari visual vision
+        mock_gemini.assert_not_called()
+        # Pastikan request dikirim ke Apps Script History Foto Studio
+        mock_post.assert_called_once()
+        sent_payload = mock_post.call_args[1].get("json")
+        self.assertEqual(sent_payload.get("action"), "insert_draft")
+        self.assertEqual(sent_payload.get("serial_number"), "F099153")
+        self.assertEqual(sent_payload.get("name_in_creative"), "ROLEX SUBMARINER DATE 126610LN / F099153 / TITIP IDWX")
+
     @patch("flask_app.kirim_balasan_wa")
     @patch("flask_app.get_blogger_service")
     @patch("flask_app.resolve_watch_spreadsheet_location")

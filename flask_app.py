@@ -3288,15 +3288,21 @@ def wa_webhook():
         # ======================================================================
         # JALUR 0: IDENTIFIKASI JAM TANGAN DARI FOTO (MULTIMODAL GEMINI VISION)
         # ======================================================================
-        # Trigger jika staff mengirim foto jam tangan:
-        # - Tanpa caption teks sama sekali, ATAU
-        # - Dengan caption deskriptif / filter lokasi yang BUKAN perintah aksi (misal: "ready in bali", "bali", "cek stok")
-        if type_msg == "imageMessage" and (not caption or not is_known_action_command(caption)):
-            # Pengecekan grup/chat yang dikecualikan dari identifikasi visual (misal Group Foto Studio)
-            if is_chat_excluded_from_identification(chat_id):
-                print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual.")
-                return jsonify({"status": "ignored", "reason": "Excluded chat/group for watch identification"}), 200
+        # Trigger jika staff mengirim foto jam tangan untuk identifikasi visual:
+        # - BUKAN chat/grup yang dikecualikan (misal Group Foto Studio)
+        # - BUKAN format input jam baru Foto Studio ([Nama Jam] / [SN])
+        # - Tanpa caption teks sama sekali, ATAU dengan caption deskriptif/lokasi yang BUKAN perintah aksi
+        is_foto_studio_input = is_valid_foto_studio_caption(caption, image_url)
+        is_excluded_from_vision = is_chat_excluded_from_identification(chat_id)
 
+        if is_excluded_from_vision:
+            # Grup Foto Studio dikecualikan dari identifikasi visual Gemini.
+            # Jika user mengirim foto TANPA caption di grup ini, langsung abaikan.
+            # Namun jika melampirkan caption (draft jam baru / perintah aksi), lanjutkan ke jalur pemrosesan di bawah!
+            if type_msg == "imageMessage" and not caption:
+                print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual (Foto tanpa caption).")
+                return jsonify({"status": "ignored", "reason": "Excluded chat/group for watch identification"}), 200
+        elif type_msg == "imageMessage" and not is_foto_studio_input and (not caption or not is_known_action_command(caption)):
             if not image_url and not jpeg_thumbnail_b64:
                 return jsonify({"status": "ignored", "reason": "Empty image URL and thumbnail"}), 200
 
