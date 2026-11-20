@@ -40,7 +40,8 @@ class TestWebhookFlowSimulation(unittest.TestCase):
             "model": "Historiques American 1921",
             "dial_color": "Silver",
             "reference": "82035",
-            "search_query": "Vacheron Constantin Historiques American 1921"
+            "search_query": "Vacheron Constantin Historiques American 1921",
+            "_image_bytes": b"fake_raw_image_bytes_12345"
         }
         mock_shopify.return_value = {
             "title": "HISTORIQUES AMERICAN 1921 ROSEGOLD SILVER DIAL (2026)",
@@ -72,6 +73,10 @@ class TestWebhookFlowSimulation(unittest.TestCase):
 
         res, code = wa_webhook()
         self.assertEqual(code, 200)
+        # Verify JSON serializability (anti 'bytes is not JSON serializable')
+        import json
+        json_output = json.dumps(res)
+        self.assertNotIn("fake_raw_image_bytes", json_output)
         self.assertEqual(res.get("status"), "success")
         self.assertEqual(res.get("action"), "identify_watch")
 
@@ -214,6 +219,10 @@ class TestWebhookFlowSimulation(unittest.TestCase):
 
         res, code = wa_webhook()
         self.assertEqual(code, 200)
+        # Verify JSON serializability (anti 'bytes is not JSON serializable')
+        import json
+        json_output = json.dumps(res)
+        self.assertNotIn("fake_raw_image_bytes", json_output)
         self.assertEqual(res.get("status"), "success")
         self.assertIn("sheets_response", res)
         # Pastikan Gemini Vision TIDAK dipanggil karena bukan perintah identifikasi
@@ -270,6 +279,10 @@ class TestWebhookFlowSimulation(unittest.TestCase):
 
         res, code = wa_webhook()
         self.assertEqual(code, 200)
+        # Verify JSON serializability (anti 'bytes is not JSON serializable')
+        import json
+        json_output = json.dumps(res)
+        self.assertNotIn("fake_raw_image_bytes", json_output)
         self.assertEqual(res.get("status"), "success")
         self.assertEqual(res.get("action"), "identify_watch")
 
@@ -321,6 +334,10 @@ class TestWebhookFlowSimulation(unittest.TestCase):
 
         res, code = wa_webhook()
         self.assertEqual(code, 200)
+        # Verify JSON serializability (anti 'bytes is not JSON serializable')
+        import json
+        json_output = json.dumps(res)
+        self.assertNotIn("fake_raw_image_bytes", json_output)
         self.assertEqual(res.get("status"), "success")
         self.assertEqual(res.get("command"), "REPOST")
         self.assertEqual(res.get("sku"), "3012154")

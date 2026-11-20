@@ -771,7 +771,7 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
     location_badge = (gemini_info.get("location_badge") or "").strip()
     full_title_text = (gemini_info.get("full_title_text") or "").strip()
     photo_type = (gemini_info.get("photo_type") or "").strip().lower()
-    inquiry_image_bytes = gemini_info.get("_image_bytes")
+    inquiry_image_bytes = gemini_info.pop("_image_bytes", None)
     query_str = (gemini_info.get("search_query") or f"{brand} {model}").strip()
 
     # Deteksi indikasi Ready in Bali dari caption teks user maupun badge/text pada gambar
@@ -3330,6 +3330,7 @@ def wa_webhook():
 
             # Cari produk AKTIF yang cocok di Shopify, dengan konteks caption user jika ada
             shopify_match = find_active_watch_in_shopify(gemini_info, user_caption=caption)
+            clean_gemini_info = {k: v for k, v in gemini_info.items() if not isinstance(v, (bytes, bytearray))}
             if not shopify_match:
                 pesan_err = (
                     f"⚠️ *PRODUK TIDAK DITEMUKAN DI SHOPIFY*\n"
@@ -3338,7 +3339,7 @@ def wa_webhook():
                     f"Namun tidak ditemukan produk aktif yang cocok di etalase toko Shopify."
                 )
                 kirim_balasan_wa(chat_id, pesan_err)
-                return jsonify({"status": "not_found", "gemini_info": gemini_info}), 200
+                return jsonify({"status": "not_found", "gemini_info": clean_gemini_info}), 200
 
             matched_sku = shopify_match["sku"]
             matched_title = shopify_match["title"]
@@ -3373,7 +3374,7 @@ def wa_webhook():
             return jsonify({
                 "status": "success",
                 "action": "identify_watch",
-                "gemini": gemini_info,
+                "gemini": clean_gemini_info,
                 "shopify": shopify_match,
                 "sheet_info": sheet_info
             }), 200
