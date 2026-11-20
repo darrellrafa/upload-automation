@@ -141,6 +141,61 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("• Ketik *reprice [harga]* untuk ubah harga", msg)
         self.assertIn("• Ketik *batal* jika tidak ada tindakan", msg)
 
+    def test_identification_message_with_form_content(self):
+        form_sample = (
+            "Nama : Said\n"
+            "No Hp : 08118811159\n"
+            "Instagram :\n"
+            "======================\n"
+            "Brand/Ref No: Omega ed white 321\n"
+            "Size/Year: 39.7 / jan 2022\n"
+            "Status/Condition: Very Mint\n"
+            "Location: Dualtime\n"
+            "Open Price (excluding 2% commision): 240-2%\n"
+            "Bottom Price (excluding 2% commision): by call\n"
+            "Notes: Sudah terpasang anti gores\n"
+            "Order received by : yusup"
+        )
+        msg = format_watch_identification_message(
+            title="SPEEDMASTER MOONWATCH 321 'ED WHITE' (2022)",
+            sku="88702793",
+            formatted_price="Rp 235,000,000",
+            sheet_info="PHOTO STUDIO (Baris 2819)",
+            location="Ready di Toko",
+            form_content=form_sample
+        )
+        self.assertIn("📊 *Spreadsheet:* PHOTO STUDIO (Baris 2819)", msg)
+        self.assertIn("Nama : Said", msg)
+        self.assertIn("Brand/Ref No: Omega ed white 321", msg)
+        self.assertIn("Order received by : yusup", msg)
+        # Pastikan letak form berada di antara Spreadsheet dan Aksi Cepat
+        pos_sheet = msg.find("📊 *Spreadsheet:* PHOTO STUDIO (Baris 2819)")
+        pos_form = msg.find("Nama : Said")
+        pos_action = msg.find("👉 *Aksi Cepat (Balas pesan ini):*")
+        self.assertTrue(pos_sheet < pos_form < pos_action)
+
+    def test_resolve_watch_spreadsheet_location_with_form(self):
+        from unittest.mock import patch, MagicMock
+        from flask_app import resolve_watch_spreadsheet_location
+
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "status": "success",
+            "tab_name": "PHOTO STUDIO",
+            "row": 2819,
+            "form": "Nama : Said\nNo Hp : 08118811159\nBrand/Ref No: Omega ed white 321"
+        }
+
+        with patch("requests.post", return_value=mock_res):
+            sheet_info, form = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]}, return_form=True)
+            self.assertEqual(sheet_info, "PHOTO STUDIO (Baris 2819)")
+            self.assertIn("Nama : Said", form)
+
+            # Test backwards compatibility when return_form=False
+            sheet_info_only = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]})
+            self.assertEqual(sheet_info_only, "PHOTO STUDIO (Baris 2819)")
+
     def test_find_active_watch_cpo_preference_for_photo_owner(self):
         from unittest.mock import patch
         import flask_app

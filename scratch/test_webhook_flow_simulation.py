@@ -51,7 +51,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
             "product_node": {"id": "123", "title": "HISTORIQUES AMERICAN 1921"},
             "variant_node": {"sku": "3012154"}
         }
-        mock_sheet.return_value = "ALL STOCK (Baris 313)"
+        mock_sheet.return_value = ("PHOTO STUDIO (Baris 2819)", "Nama : Said\nNo Hp : 08118811159\nBrand/Ref No: Omega ed white 321")
 
         # 1. Staff sends watch photo with "identifikasi" keyword
         photo_payload = {
@@ -79,16 +79,21 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertNotIn("fake_raw_image_bytes", json_output)
         self.assertEqual(res.get("status"), "success")
         self.assertEqual(res.get("action"), "identify_watch")
+        self.assertEqual(res.get("form_content"), "Nama : Said\nNo Hp : 08118811159\nBrand/Ref No: Omega ed white 321")
 
         # Verify active session stored
         self.assertIn(chat_id, ACTIVE_IDENTIFIED_WATCHES)
         self.assertEqual(ACTIVE_IDENTIFIED_WATCHES[chat_id]["sku"], "3012154")
+        self.assertEqual(ACTIVE_IDENTIFIED_WATCHES[chat_id]["sheet_info"], "PHOTO STUDIO (Baris 2819)")
 
         # Verify WA message sent to chat_id
         mock_kirim_wa.assert_called()
         last_wa_msg = mock_kirim_wa.call_args[0][1]
         self.assertIn("⌚ *IDENTIFIKASI JAM TANGAN IDWX*", last_wa_msg)
         self.assertIn("3012154", last_wa_msg)
+        self.assertIn("📊 *Spreadsheet:* PHOTO STUDIO (Baris 2819)", last_wa_msg)
+        self.assertIn("Nama : Said", last_wa_msg)
+        self.assertIn("Brand/Ref No: Omega ed white 321", last_wa_msg)
         self.assertIn("• Ketik *batal* jika tidak ada tindakan", last_wa_msg)
 
         # 2. Staff replies "abaikan"

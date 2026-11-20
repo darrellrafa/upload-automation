@@ -493,26 +493,33 @@ def is_identification_request(text):
         return False
     return bool(re.search(r'\b(identifikasi|identify)\b', text.strip(), re.IGNORECASE))
 
-def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None):
+def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None, form_content=""):
     """
     Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'batal').
     Mendukung status lokasi dinamis (misal: 'Ready di Toko' atau 'Ready in Bali').
+    Menyertakan isi formulir konsinyasi (Kolom D) jika tersedia.
     """
     status_str = f"AKTIF ({location})" if location else "AKTIF (Ready di Toko)"
-    return (
+    msg = (
         f"⌚ *IDENTIFIKASI JAM TANGAN IDWX*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📌 *Merek & Seri:* {title}\n"
         f"🔢 *Kode / SKU:* {sku}\n"
         f"💰 *Harga Saat Ini:* {formatted_price}\n"
         f"📦 *Status:* {status_str}\n"
-        f"📊 *Spreadsheet:* {sheet_info}\n\n"
-        f"👉 *Aksi Cepat (Balas pesan ini):*\n"
+        f"📊 *Spreadsheet:* {sheet_info}\n"
+    )
+    if form_content and form_content.strip():
+        msg += f"\n{form_content.strip()}\n"
+
+    msg += (
+        f"\n👉 *Aksi Cepat (Balas pesan ini):*\n"
         f"• Ketik *sold* untuk menandai laku\n"
         f"• Ketik *on hold* untuk simpan/hold\n"
         f"• Ketik *reprice [harga]* untuk ubah harga\n"
         f"• Ketik *batal* jika tidak ada tindakan"
     )
+    return msg
 
 def identify_watch_with_gemini(image_url=None, image_bytes=None, jpeg_thumbnail=None, chat_id=None, id_message=None):
     """
@@ -1065,10 +1072,12 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
         "location": best.get("location", "Ready di Toko")
     }
 
-def resolve_watch_spreadsheet_location(sku, blogger_post=None):
+def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False):
     """
-    Menentukan lokasi spreadsheet (Nama Tab & Nomor Baris) untuk jam tangan yang diidentifikasi.
+    Menentukan lokasi spreadsheet (Nama Tab & Nomor Baris) dan isi formulir konsinyasi (Kolom D)
+    untuk jam tangan yang diidentifikasi.
     Format yang dihasilkan: "ALL STOCK (Baris 313)" atau "PHOTO STUDIO (Baris 142)"
+    Jika return_form=True, mengembalikan tuple (sheet_info, form_content).
     """
     is_consign_ps = False
     is_consign_po = False
@@ -1081,6 +1090,8 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None):
         is_featured = any("FEATURED" in l.upper() for l in labels)
 
     canonical_sku = clean_sku_string(sku).upper()
+    sheet_info = "ALL STOCK"
+    form_content = ""
 
     # 1. Jika terindikasi Consignment PO atau berawalan CPO
     if is_consign_po or sku.upper().startswith("CPO"):
@@ -1089,10 +1100,13 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None):
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success" and data.get("row"):
-                    return f"PHOTO OWNER (Baris {data.get('row')})"
+                    sheet_info = f"{data.get('tab_name', 'PHOTO OWNER')} (Baris {data.get('row')})"
+                    form_content = (data.get("form") or "").strip()
+                    return (sheet_info, form_content) if return_form else sheet_info
         except Exception as e:
             print(f"⚠️ Error query consignment PO sheet: {e}")
-        return "PHOTO OWNER"
+        sheet_info = "PHOTO OWNER"
+        return (sheet_info, form_content) if return_form else sheet_info
 
     # 2. Jika terindikasi Consignment PS
     if is_consign_ps:
@@ -1101,10 +1115,13 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None):
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success" and data.get("row"):
-                    return f"PHOTO STUDIO (Baris {data.get('row')})"
+                    sheet_info = f"{data.get('tab_name', 'PHOTO STUDIO')} (Baris {data.get('row')})"
+                    form_content = (data.get("form") or "").strip()
+                    return (sheet_info, form_content) if return_form else sheet_info
         except Exception as e:
             print(f"⚠️ Error query consignment PS sheet: {e}")
-        return "PHOTO STUDIO"
+        sheet_info = "PHOTO STUDIO"
+        return (sheet_info, form_content) if return_form else sheet_info
 
     # 3. Default atau FEATURED: Cek Spreadsheet Slow Moving (Tab ALL STOCK)
     try:
@@ -1112,7 +1129,8 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None):
         if res.status_code == 200:
             data = res.json()
             if data.get("status") == "success" and data.get("row"):
-                return f"{data.get('tab_name', 'ALL STOCK')} (Baris {data.get('row')})"
+                sheet_info = f"{data.get('tab_name', 'ALL STOCK')} (Baris {data.get('row')})"
+                return (sheet_info, form_content) if return_form else sheet_info
     except Exception as e:
         print(f"⚠️ Error query slow moving sheet: {e}")
 
@@ -1122,11 +1140,25 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None):
         if res_alt.status_code == 200:
             data_alt = res_alt.json()
             if data_alt.get("status") == "success" and data_alt.get("row"):
-                return f"PHOTO STUDIO (Baris {data_alt.get('row')})"
+                sheet_info = f"{data_alt.get('tab_name', 'PHOTO STUDIO')} (Baris {data_alt.get('row')})"
+                form_content = (data_alt.get("form") or "").strip()
+                return (sheet_info, form_content) if return_form else sheet_info
     except Exception:
         pass
 
-    return "ALL STOCK"
+    # Fallback cek Consignment PHOTO OWNER jika masih belum ketemu
+    try:
+        res_alt_po = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku}, timeout=15)
+        if res_alt_po.status_code == 200:
+            data_alt_po = res_alt_po.json()
+            if data_alt_po.get("status") == "success" and data_alt_po.get("row"):
+                sheet_info = f"{data_alt_po.get('tab_name', 'PHOTO OWNER')} (Baris {data_alt_po.get('row')})"
+                form_content = (data_alt_po.get("form") or "").strip()
+                return (sheet_info, form_content) if return_form else sheet_info
+    except Exception:
+        pass
+
+    return (sheet_info, form_content) if return_form else sheet_info
 
 def parse_repost_chat(message_text):
     """
@@ -3351,8 +3383,13 @@ def wa_webhook():
             service = get_blogger_service()
             post = find_blogger_post_by_code(service, matched_sku) if service else None
 
-            # Tentukan lokasi spreadsheet (Tab & Nomor Baris)
-            sheet_info = resolve_watch_spreadsheet_location(matched_sku, blogger_post=post)
+            # Tentukan lokasi spreadsheet (Tab & Nomor Baris) dan form konsinyasi jika ada
+            sheet_res = resolve_watch_spreadsheet_location(matched_sku, blogger_post=post, return_form=True)
+            if isinstance(sheet_res, tuple):
+                sheet_info, form_content = sheet_res
+            else:
+                sheet_info = str(sheet_res)
+                form_content = ""
 
             # Simpan ke sesi jam tangan aktif per chat_id
             ACTIVE_IDENTIFIED_WATCHES[chat_id] = {
@@ -3361,14 +3398,22 @@ def wa_webhook():
                 "formatted_price": formatted_price,
                 "numeric_price": numeric_price,
                 "sheet_info": sheet_info,
+                "form_content": form_content,
                 "location": matched_location,
                 "timestamp": time.time()
             }
             if len(ACTIVE_IDENTIFIED_WATCHES) > MAX_ACTIVE_WATCHES:
                 ACTIVE_IDENTIFIED_WATCHES.popitem(last=False)
 
-            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk status lokasi dinamis)
-            pesan_id = format_watch_identification_message(matched_title, matched_sku, formatted_price, sheet_info, location=matched_location)
+            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk status lokasi dinamis dan isi form konsinyasi)
+            pesan_id = format_watch_identification_message(
+                matched_title,
+                matched_sku,
+                formatted_price,
+                sheet_info,
+                location=matched_location,
+                form_content=form_content
+            )
             kirim_balasan_wa(chat_id, pesan_id)
 
             return jsonify({
@@ -3376,7 +3421,8 @@ def wa_webhook():
                 "action": "identify_watch",
                 "gemini": clean_gemini_info,
                 "shopify": shopify_match,
-                "sheet_info": sheet_info
+                "sheet_info": sheet_info,
+                "form_content": form_content
             }), 200
 
         if not caption:
