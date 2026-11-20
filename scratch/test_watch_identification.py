@@ -1,7 +1,7 @@
 import sys
 import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Mock external modules if not installed locally
 for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth2.credentials", "googleapiclient", "googleapiclient.discovery"]:
@@ -18,6 +18,7 @@ for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth
 # Ensure current dir in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import flask_app
 from flask_app import (
     parse_reprice_chat,
     parse_takedown_chat,
@@ -398,6 +399,163 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             self.assertTrue(mock_visual.called)
             self.assertEqual(res_photo_only["sku"], "CPO-280826-03")
             self.assertEqual(res_photo_only["location"], "Ready in Bali")
+
+    def test_gemini_vision_catalog_card_exact_matching(self):
+        """
+        Memastikan bahwa jika gambar adalah product card / screenshot katalog yang memuat text spesifik
+        (seperti full_title_text, year, extracted_price, dan location_badge), sistem mencocokkan
+        ke SKU yang 100% tepat tanpa tertukar dengan model tahun lain atau harga berbeda.
+        """
+        mock_gql_products = {
+            "data": {
+                "products": {
+                    "edges": [
+                        # Yacht-Master 2018 (Bali) vs 2013 (Studio)
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/1",
+                                "title": "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)",
+                                "tags": ["__label:Ready In Bali", "TitipOwner"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-08-28T10:00:00Z",
+                                "variants": {"edges": [{"node": {"id": "v1", "sku": "CPO-280826-03", "price": "359000000.00", "inventoryQuantity": 1}}]}
+                            }
+                        },
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/2",
+                                "title": "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2013)",
+                                "tags": ["__label2:Consignment", "Men", "TitipIDWX"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-01-15T10:00:00Z",
+                                "variants": {"edges": [{"node": {"id": "v2", "sku": "363273X6", "price": "280000000.00", "inventoryQuantity": 1}}]}
+                            }
+                        },
+                        # Air King 2025 CPO (135jt) vs Air King 2025 Studio (142.5jt)
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/3",
+                                "title": "AIR KING (2025)",
+                                "tags": ["TitipOwner"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-10-23T10:00:00Z",
+                                "variants": {"edges": [{"node": {"id": "v3", "sku": "CPO-231026-02", "price": "135000000.00", "inventoryQuantity": 1}}]}
+                            }
+                        },
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/4",
+                                "title": "AIR KING (2025)",
+                                "tags": ["Men"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-09-01T10:00:00Z",
+                                "variants": {"edges": [{"node": {"id": "v4", "sku": "6F2Y6936", "price": "142500000.00", "inventoryQuantity": 1}}]}
+                            }
+                        },
+                        # Datejust Wimbledon 2022 (Bali)
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/5",
+                                "title": "DATEJUST 41MM TWOTONE YELLOWGOLD WIMBLEDON DIAL (2022)",
+                                "tags": ["__label:Ready In Bali", "TitipOwner"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-08-28T10:00:00Z",
+                                "variants": {"edges": [{"node": {"id": "v5", "sku": "CPO-280826-04", "price": "249000000.00", "inventoryQuantity": 1}}]}
+                            }
+                        },
+                        # Hublot Big Bang Unico 42mm (2026)
+                        {
+                            "node": {
+                                "id": "gid://shopify/Product/6",
+                                "title": "BIG BANG UNICO 42MM TITANIUM CERAMIC (2026)",
+                                "tags": ["__label2:Consignment", "Men", "TitipIDWX"],
+                                "status": "ACTIVE",
+                                "createdAt": "2026-11-10T10:00:00Z",
+                                "variants": {"edges": [{"node": {"id": "v6", "sku": "1636626", "price": "258000000.00", "inventoryQuantity": 1}}]}
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        with patch.object(flask_app, "get_shopify_token", return_value="fake_token"), \
+             patch("requests.post") as mock_post:
+
+            mock_post_res = MagicMock()
+            mock_post_res.status_code = 200
+            mock_post_res.json.return_value = mock_gql_products
+            mock_post.return_value = mock_post_res
+
+            # 1. Yacht-Master II 2018 (Bali - 359jt) harus terpilih CPO-280826-03, bukan 363273X6 (2013 - 280jt)
+            ym_info = {
+                "brand": "Rolex",
+                "model": "Yacht-Master II 44mm Twotone Rosegold",
+                "year": "2018",
+                "dial_color": "White",
+                "reference": "",
+                "extracted_price": 359000000,
+                "location_badge": "Ready In Bali",
+                "full_title_text": "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)",
+                "search_query": "Yacht-Master II 44mm Twotone Rosegold 2018",
+                "photo_type": "photo_studio"
+            }
+            res_ym = flask_app.find_active_watch_in_shopify(ym_info, user_caption="")
+            self.assertEqual(res_ym["sku"], "CPO-280826-03")
+            self.assertEqual(res_ym["location"], "Ready in Bali")
+            self.assertEqual(res_ym["numeric_price"], 359000000.0)
+
+            # 2. Air King 2025 dengan harga 135jt harus terpilih CPO-231026-02, bukan 6F2Y6936 (142.5jt)
+            ak_info = {
+                "brand": "Rolex",
+                "model": "Air King",
+                "year": "2025",
+                "dial_color": "Black",
+                "reference": "",
+                "extracted_price": 135000000,
+                "location_badge": "",
+                "full_title_text": "AIR KING (2025)",
+                "search_query": "Air King 2025",
+                "photo_type": "photo_owner"
+            }
+            res_ak = flask_app.find_active_watch_in_shopify(ak_info, user_caption="")
+            self.assertEqual(res_ak["sku"], "CPO-231026-02")
+            self.assertEqual(res_ak["numeric_price"], 135000000.0)
+
+            # 3. Datejust Wimbledon 2022 Bali 249jt harus terpilih CPO-280826-04
+            dj_info = {
+                "brand": "Rolex",
+                "model": "Datejust 41",
+                "year": "2022",
+                "dial_color": "Wimbledon",
+                "reference": "126333",
+                "extracted_price": 249000000,
+                "location_badge": "Ready In Bali",
+                "full_title_text": "DATEJUST 41MM TWOTONE YELLOWGOLD WIMBLEDON DIAL (2022)",
+                "search_query": "Rolex Datejust 41 Wimbledon 126333",
+                "photo_type": "photo_studio"
+            }
+            res_dj = flask_app.find_active_watch_in_shopify(dj_info, user_caption="")
+            self.assertEqual(res_dj["sku"], "CPO-280826-04")
+            self.assertEqual(res_dj["location"], "Ready in Bali")
+            self.assertEqual(res_dj["numeric_price"], 249000000.0)
+
+            # 4. Hublot Big Bang Unico 42mm (2026) 258jt harus terpilih 1636626
+            hb_info = {
+                "brand": "Hublot",
+                "model": "Big Bang Unico 42mm",
+                "year": "2026",
+                "dial_color": "Titanium Ceramic Skeleton",
+                "reference": "",
+                "extracted_price": 258000000,
+                "location_badge": "Consignment",
+                "full_title_text": "BIG BANG UNICO 42MM TITANIUM CERAMIC (2026)",
+                "search_query": "Hublot Big Bang Unico 42mm Titanium Ceramic 2026",
+                "photo_type": "photo_owner"
+            }
+            res_hb = flask_app.find_active_watch_in_shopify(hb_info, user_caption="")
+            self.assertEqual(res_hb["sku"], "1636626")
+            self.assertEqual(res_hb["numeric_price"], 258000000.0)
 
 if __name__ == "__main__":
     unittest.main()

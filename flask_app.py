@@ -504,24 +504,57 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info,
         f"• Ketik *batal* jika tidak ada tindakan"
     )
 
-def identify_watch_with_gemini(image_url=None, image_bytes=None):
+def identify_watch_with_gemini(image_url=None, image_bytes=None, jpeg_thumbnail=None, chat_id=None, id_message=None):
     """
-    Menganalisis foto jam tangan menggunakan Gemini Vision multimodal (gemini-3.1-flash-lite).
-    Mengekstrak merek, model/seri, dial color, reference number, query pencarian, serta photo_type (photo_owner vs photo_studio).
+    Menganalisis foto jam tangan menggunakan Gemini Vision multimodal (gemini-3.1-flash-lite / gemini-3.5-flash).
+    Mengekstrak merek, model/seri, tahun rilis, warna dial, nomor referensi, harga tertera, badge lokasi, full title text, query pencarian, serta photo_type (photo_owner vs photo_studio).
+    Dilengkapi sistem unduh tangguh (User-Agent, fallback Green API downloadFile, dan fallback jpegThumbnail).
     """
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY tidak terkonfigurasi di environment.")
         return None
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     try:
+        # 1. Coba unduh gambar dari downloadUrl utama
         if not image_bytes and image_url:
             print(f"📥 Mengunduh gambar untuk analisis Gemini Vision dari: {image_url[:80]}...")
-            img_res = requests.get(image_url, timeout=20)
-            if img_res.status_code == 200:
-                image_bytes = img_res.content
-            else:
-                print(f"⚠️ Gagal mengunduh gambar: HTTP {img_res.status_code}")
-                return None
+            try:
+                img_res = requests.get(image_url, headers=headers, timeout=20)
+                if img_res.status_code == 200 and len(img_res.content) > 100:
+                    image_bytes = img_res.content
+                else:
+                    print(f"⚠️ Gagal unduh downloadUrl langsung: HTTP {img_res.status_code}")
+            except Exception as dl_err:
+                print(f"⚠️ Exception unduh downloadUrl langsung: {dl_err}")
+
+        # 2. Fallback: Request link unduh segar via Green API downloadFile API jika tersedia
+        if not image_bytes and GREEN_API_ID_INSTANCE and GREEN_API_API_TOKEN and chat_id and id_message:
+            try:
+                dl_api_url = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/downloadFile/{GREEN_API_API_TOKEN}"
+                dl_res = requests.post(dl_api_url, json={"chatId": chat_id, "idMessage": id_message}, timeout=15)
+                if dl_res.status_code == 200:
+                    fresh_url = dl_res.json().get("downloadUrl")
+                    if fresh_url:
+                        res_fresh = requests.get(fresh_url, headers=headers, timeout=20)
+                        if res_fresh.status_code == 200 and len(res_fresh.content) > 100:
+                            image_bytes = res_fresh.content
+                            print("📥 Berhasil mengunduh gambar via Green API downloadFile endpoint.")
+            except Exception as api_dl_err:
+                print(f"⚠️ Fallback Green API downloadFile gagal: {api_dl_err}")
+
+        # 3. Fallback: Gunakan jpegThumbnail dari payload jika download link gagal
+        if not image_bytes and jpeg_thumbnail:
+            try:
+                decoded_thumb = base64.b64decode(jpeg_thumbnail)
+                if decoded_thumb and len(decoded_thumb) > 50:
+                    image_bytes = decoded_thumb
+                    print("📸 Menggunakan fallback jpegThumbnail dari Green API webhook.")
+            except Exception as th_err:
+                print(f"⚠️ Gagal decode jpegThumbnail: {th_err}")
 
         if not image_bytes:
             print("⚠️ Data gambar kosong untuk analisis Gemini Vision.")
@@ -531,21 +564,27 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None):
 
         prompt = (
             "You are a luxury watch authentication and cataloging expert at IDWX.\n"
-            "Analyze this luxury wristwatch image carefully.\n"
+            "Analyze this luxury wristwatch image carefully.\n\n"
+            "SPECIAL INSTRUCTION FOR SCREENSHOTS, PRODUCT CARDS, OR CATALOG LISTINGS:\n"
+            "- If the image is a screenshot, product card, website flyer, or catalog listing containing text/specifications (e.g. brand, model name, dial, reference, year, price, or location badge like 'Ready In Bali' or 'Consignment'), READ and EXTRACT that visible text directly to ensure exact identification!\n\n"
             "Identify:\n"
-            "1. Brand (e.g. Rolex, Patek Philippe, Audemars Piguet, Vacheron Constantin, Hublot, Jaeger-LeCoultre, Omega, Cartier, Panerai, etc.)\n"
-            "2. Model / Series / Collection (e.g. Historiques American 1921, Submariner Date, Royal Oak Offshore, Air-King, Big Bang, Master Control Calendar, Santos, etc.)\n"
-            "3. Dial color and key dial features (e.g. Silver, Black, Blue, Salmon, Skeleton, Diamond dial, etc.)\n"
-            "4. Reference number or case number if recognized or visible (e.g. 82035, 126610LN, 126900, 26470ST, or empty string if uncertain)\n"
-            "5. Search keywords string optimized for searching Shopify inventory (e.g. 'Historiques American 1921', 'Air King', or 'Submariner Date 126610LN')\n"
-            "6. Photo setting type: Determine whether this image is 'photo_owner' or 'photo_studio':\n"
-            "   - 'photo_owner': Taken casually/informally by an owner or customer (e.g. resting on a cushion/pillow, bedsheet, sofa, cloth, car interior, desk/table, or wrist/hand).\n"
-            "   - 'photo_studio': Taken professionally in a photo studio/lightbox with a clean, seamless plain white or light grey background.\n\n"
+            "1. brand: Brand name (e.g. Rolex, Hublot, Patek Philippe, Audemars Piguet, Omega, Tudor, Cartier, etc.)\n"
+            "2. model: Model / Series / Collection (e.g. Datejust 41, Big Bang Unico 42mm, Air King, Yacht-Master II 44mm, Historiques American 1921, Submariner Date, etc.)\n"
+            "3. year: Release / catalog year as a 4-digit string if visible in text or recognized (e.g. '2022', '2018', '2025', '2026', or empty string if uncertain)\n"
+            "4. dial_color: Dial color / key dial features (e.g. 'Wimbledon', 'Slate Grey', 'Black', 'Blue', 'Skeleton', 'Silver', 'Salmon', etc.)\n"
+            "5. reference: Reference or case number if visible or recognized (e.g. '126333', '116681', '126900', '441.NM.1170.RX', or empty string if uncertain)\n"
+            "6. extracted_price: Numeric price in Rupiah (integer) if visible in image (e.g. 249000000, 258000000, 135000000, 359000000, or null if no price text)\n"
+            "7. location_badge: Location / tag badge if visible on card (e.g. 'Ready In Bali', 'Consignment', or empty string)\n"
+            "8. full_title_text: Full product title text as written on the card/screenshot if visible (e.g. 'DATEJUST 41MM TWOTONE YELLOWGOLD WIMBLEDON DIAL (2022)', 'BIG BANG UNICO 42MM TITANIUM CERAMIC (2026)', 'YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)', 'AIR KING (2025)')\n"
+            "9. search_query: Search keywords optimized for searching Shopify inventory (e.g. 'Datejust 41 Wimbledon', 'Big Bang Unico 42mm Titanium Ceramic', 'Air King')\n"
+            "10. photo_type: Determine whether this image is 'photo_owner' or 'photo_studio':\n"
+            "   - 'photo_owner': Casual photo taken by owner (e.g. on pillow/cushion, bed, sofa, car interior, desk, or wrist).\n"
+            "   - 'photo_studio': Professional photo with plain lightbox/studio background or on a watch stand.\n\n"
             "Respond STRICTLY in JSON format with keys:\n"
-            "brand, model, dial_color, reference, search_query, photo_type"
+            "brand, model, year, dial_color, reference, extracted_price, location_badge, full_title_text, search_query, photo_type"
         )
 
-        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-2.5-flash-lite"]
+        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"]
         payload = {
             "contents": [{
                 "parts": [
@@ -569,11 +608,20 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None):
                     if candidates:
                         raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                         if raw_text:
-                            clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
-                            clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
-                            parsed = json.loads(clean_json_str)
+                            parsed = None
+                            json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                            if json_match:
+                                try:
+                                    parsed = json.loads(json_match.group(0))
+                                except Exception:
+                                    pass
+                            if not parsed:
+                                clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
+                                clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
+                                parsed = json.loads(clean_json_str)
+
                             parsed["_image_bytes"] = image_bytes
-                            print(f"🤖 Gemini Vision ({model_name}) berhasil mengidentifikasi: {parsed.get('brand')} - {parsed.get('model')} (Tipe Foto: {parsed.get('photo_type')})")
+                            print(f"🤖 Gemini Vision ({model_name}) berhasil mengidentifikasi: {parsed.get('brand')} - {parsed.get('model')} (Tahun: {parsed.get('year')}, Harga: {parsed.get('extracted_price')}, Tipe Foto: {parsed.get('photo_type')})")
                             return parsed
                 else:
                     print(f"⚠️ Gemini Vision ({model_name}) HTTP {res.status_code}: {res.text[:120]}")
@@ -594,16 +642,20 @@ def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidat
     if not GEMINI_API_KEY or not inquiry_image_bytes:
         return None
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     try:
         url_a = candidate_a.get("image_url")
         url_b = candidate_b.get("image_url")
         if not url_a or not url_b:
             return None
 
-        # Download featured image for candidate A & B (timeout 8s each)
+        # Download featured image for candidate A & B (timeout 10s each with browser headers)
         try:
-            res_a = requests.get(url_a, timeout=8)
-            res_b = requests.get(url_b, timeout=8)
+            res_a = requests.get(url_a, headers=headers, timeout=10)
+            res_b = requests.get(url_b, headers=headers, timeout=10)
             if res_a.status_code != 200 or res_b.status_code != 200:
                 print("⚠️ Gagal mengunduh gambar kandidat untuk verifikasi visual.")
                 return None
@@ -650,7 +702,7 @@ def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidat
             }
         }
 
-        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.7-flash"]
+        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"]
         for model_name in models_to_try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             try:
@@ -660,9 +712,18 @@ def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidat
                     candidates = res_json.get("candidates", [])
                     if candidates:
                         raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
-                        clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
-                        parsed = json.loads(clean_json_str)
+                        parsed = None
+                        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                        if json_match:
+                            try:
+                                parsed = json.loads(json_match.group(0))
+                            except Exception:
+                                pass
+                        if not parsed:
+                            clean_json_str = re.sub(r'^```json\s*', '', raw_text.strip(), flags=re.IGNORECASE)
+                            clean_json_str = re.sub(r'```$', '', clean_json_str.strip())
+                            parsed = json.loads(clean_json_str)
+
                         winner = parsed.get("winner", "").strip().upper()
                         print(f"👁️ Visual Verification ({model_name}): Pemenang '{winner}' (Confidence: {parsed.get('confidence')}, Alasan: {parsed.get('reason')})")
                         if winner in ["A", "B"]:
@@ -680,8 +741,8 @@ def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidat
 def find_active_watch_in_shopify(gemini_info, user_caption=""):
     """
     Mencari produk jam tangan AKTIF di Shopify yang paling sesuai dengan hasil analisis Gemini Vision.
-    Mendukung pembedaan Photo Owner vs Photo Studio, Recency, Filter/Tag Lokasi (misal Ready in Bali),
-    dan Verifikasi Visual Multimodal (Tie-Breaker).
+    Mendukung pembedaan Photo Owner vs Photo Studio, Recency, Filter/Tag Lokasi (Ready in Bali / Consignment),
+    Kecocokan Tahun Rilis, Kecocokan Harga Tertera, dan Verifikasi Visual Multimodal (Tie-Breaker).
     Mengembalikan dict dengan product_node, variant_node, sku, title, numeric_price, formatted_price, location.
     """
     token = get_shopify_token()
@@ -695,25 +756,47 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
     model = (gemini_info.get("model") or "").strip()
     ref = (gemini_info.get("reference") or "").strip()
     dial = (gemini_info.get("dial_color") or "").strip()
+    year = (gemini_info.get("year") or "").strip()
+    extracted_price = gemini_info.get("extracted_price")
+    location_badge = (gemini_info.get("location_badge") or "").strip()
+    full_title_text = (gemini_info.get("full_title_text") or "").strip()
     photo_type = (gemini_info.get("photo_type") or "").strip().lower()
     inquiry_image_bytes = gemini_info.get("_image_bytes")
     query_str = (gemini_info.get("search_query") or f"{brand} {model}").strip()
+
+    # Deteksi indikasi Ready in Bali dari caption teks user maupun badge/text pada gambar
     is_caption_bali = "bali" in (user_caption or "").lower()
+    is_image_bali = "bali" in location_badge.lower() or "bali" in full_title_text.lower()
+    is_bali_requested = is_caption_bali or is_image_bali
 
     model_words = [w for w in re.split(r'[^A-Za-z0-9]+', model) if len(w) >= 3 and w.lower() not in ["watch", "automatic", "chronograph", "dial", "edition", "series"]]
     brand_words = [w for w in re.split(r'[^A-Za-z0-9]+', brand) if len(w) >= 3]
 
     candidate_search_queries = []
 
-    # Jika caption user mengandung kata bali, prioritaskan pencarian dengan kata bali
-    if is_caption_bali and model_words:
-        candidate_search_queries.append(f"status:active {' '.join(model_words[:2])} bali")
+    # 1. Prioritas Tertinggi: Jika terdeteksi full_title_text dari screenshot/product card
+    if full_title_text:
+        clean_full = re.sub(r'[\(\)\[\]\{\}]', ' ', full_title_text).strip()
+        candidate_search_queries.append(f"status:active {clean_full}")
+        if is_bali_requested:
+            candidate_search_queries.append(f"status:active {clean_full} bali")
 
-    # 1. Query spesifik dengan referensi jika ada
+    # 2. Query search_query langsung yang spesifik (misal: "Hublot Big Bang Unico 42mm Titanium Ceramic 2026")
+    if query_str:
+        clean_qs = re.sub(r'[\(\)\[\]\{\}]', ' ', query_str).strip()
+        candidate_search_queries.append(f"status:active {clean_qs}")
+        if is_bali_requested:
+            candidate_search_queries.append(f"status:active {clean_qs} bali")
+
+    # 3. Query spesifik dengan referensi jika ada
     if ref:
         candidate_search_queries.append(f"status:active {ref}")
 
-    # 2. Query model unik (misal: "Historiques American 1921" atau "American 1921")
+    # 4. Query model + year jika ada
+    if model_words and year and year.isdigit():
+        candidate_search_queries.append(f"status:active {' '.join(model_words[:3])} {year}")
+
+    # 5. Query model unik (misal: "Big Bang Unico 42mm", "Yacht-Master II 44mm", "Historiques American 1921")
     if len(model_words) >= 2:
         candidate_search_queries.append(f"status:active {' '.join(model_words[:3])}")
     if model_words:
@@ -721,12 +804,9 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
         if len(model_words) > 1:
             candidate_search_queries.append(f"status:active {model_words[0]}")
 
-    # 3. Query brand + model
+    # 6. Query brand + model
     if brand_words and model_words:
         candidate_search_queries.append(f"status:active {brand_words[0]} {model_words[0]}")
-
-    # 4. Query search_query langsung
-    candidate_search_queries.append(f"status:active {query_str}")
 
     seen_product_ids = set()
     scored_candidates = []
@@ -792,6 +872,27 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
                     elif status_upper == "DRAFT":
                         score -= 2000
 
+                    # 1. Matching Full Title Text (sangat tinggi jika cocok dengan screenshot/card)
+                    if full_title_text:
+                        norm_full = re.sub(r'[^A-Z0-9]+', ' ', full_title_text.upper()).strip()
+                        norm_cand = re.sub(r'[^A-Z0-9]+', ' ', title_upper).strip()
+                        if norm_full and norm_cand:
+                            if norm_full == norm_cand:
+                                score += 40000
+                            elif norm_full in norm_cand or norm_cand in norm_full:
+                                score += 20000
+
+                    # 2. Matching Year (misal 2018 vs 2013, 2022, 2025, 2026)
+                    if year and len(year) == 4 and year.isdigit():
+                        if f"({year})" in title_upper or f" {year} " in f" {title_upper} ":
+                            score += 25000
+                        else:
+                            # Penalti tajam jika judul kandidat memiliki tahun berbeda yang kontradiktif
+                            cand_years = re.findall(r'\b(19\d\d|20\d\d)\b', title_upper)
+                            if cand_years and any(cy != year for cy in cand_years):
+                                score -= 35000
+
+                    # 3. Matching Brand Words & Model Words
                     for bw in brand_words:
                         if bw.upper() in title_upper:
                             score += 2000
@@ -800,22 +901,35 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
                         if mw.upper() in title_upper:
                             score += 3000
 
-                    if dial and dial.upper() in title_upper:
-                        score += 1500
+                    # 4. Matching Dial Color / Dial Features
+                    if dial:
+                        if dial.upper() in title_upper:
+                            score += 5000
+                        else:
+                            dial_words = [dw for dw in re.split(r'[^A-Za-z0-9]+', dial) if len(dw) >= 3 and dw.lower() not in ["dial", "color", "colour", "with", "and"]]
+                            for dw in dial_words:
+                                if dw.upper() in title_upper:
+                                    score += 2500
 
+                    # 5. Matching Reference Number
                     if ref and ref.upper() in title_upper:
                         score += 5000
 
-                    # Bonus kecocokan model persis di judul
-                    if model and model.upper() in title_upper:
-                        score += 2000
+                    # 6. Matching Search Query keywords (e.g. 42mm, Titanium, Ceramic)
+                    query_words = [qw for qw in re.split(r'[^A-Za-z0-9]+', query_str) if len(qw) >= 3 and qw.lower() not in ["watch", "automatic", "chronograph", "edition", "series", "rolex", "hublot", "patek"]]
+                    for qw in query_words:
+                        if qw.upper() in title_upper:
+                            score += 1500
 
-                    # Penyesuaian lokasi jika user menyebut bali di caption
-                    if is_caption_bali:
+                    # 7. Penyesuaian Lokasi Bali
+                    if is_bali_requested:
                         if is_candidate_bali:
-                            score += 25000  # Prioritas sangat tinggi jika caption menyebut bali dan produk bertag bali
+                            score += 30000  # Prioritas sangat tinggi jika Bali terdeteksi dan produk bertag Bali
                         else:
-                            score -= 10000  # Penalti untuk produk non-bali jika user spesifik menyebut bali
+                            score -= 15000  # Penalti untuk produk non-bali jika user/gambar spesifik menyebut bali
+                    elif is_candidate_bali and not is_image_bali and not is_caption_bali:
+                        # Jika tidak ada indikasi Bali sama sekali, jangan beri prioritas berlebih pada Bali
+                        pass
 
                     v_edges = p_node.get("variants", {}).get("edges", [])
                     chosen_variant = None
@@ -832,8 +946,20 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
                     if chosen_variant and chosen_variant.get("sku"):
                         chosen_sku = (chosen_variant.get("sku") or "").strip()
                         is_cpo_sku = chosen_sku.upper().startswith("CPO")
+                        cand_price = float(chosen_variant.get("price") or 0.0)
 
-                        # Penyesuaian skor berdasarkan photo_type vs tipe SKU (CPO vs Reguler Studio)
+                        # 8. Matching Harga yang Tertera di Gambar (extracted_price)
+                        if extracted_price and isinstance(extracted_price, (int, float)) and extracted_price > 0:
+                            if cand_price > 0:
+                                price_diff_ratio = abs(cand_price - extracted_price) / extracted_price
+                                if price_diff_ratio <= 0.02:  # Cocok persis (selisih <= 2%)
+                                    score += 35000
+                                elif price_diff_ratio <= 0.05:  # Selisih sangat tipis (<= 5%)
+                                    score += 15000
+                                elif price_diff_ratio > 0.15:  # Beda harga signifikan (> 15%)
+                                    score -= 20000
+
+                        # 9. Penyesuaian skor berdasarkan photo_type vs tipe SKU (CPO vs Reguler Studio)
                         if photo_type == "photo_owner":
                             if is_cpo_sku:
                                 score += 15000  # Memprioritaskan konsinyasi Photo Owner
@@ -842,10 +968,8 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
                         elif photo_type == "photo_studio":
                             if not is_cpo_sku:
                                 score += 2000   # Sedikit prioritas untuk stok studio reguler
-                            # CATATAN: Jangan beri penalti negatif pada CPO karena jam tangan CPO (misal titipan owner / stok Bali)
-                            # seringkali difoto secara profesional di atas stand jam (studio setting).
 
-                        # Bonus tanggal listing terbaru (Recency)
+                        # 10. Bonus tanggal listing terbaru (Recency)
                         created_at_str = p_node.get("createdAt")
                         if created_at_str:
                             try:
@@ -869,7 +993,7 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
                             "variant_node": chosen_variant,
                             "sku": chosen_sku,
                             "title": p_node.get("title", "").strip(),
-                            "price": float(chosen_variant.get("price") or 0.0),
+                            "price": cand_price,
                             "image_url": cand_img_url,
                             "created_at": created_at_str,
                             "location": product_location,
@@ -883,31 +1007,40 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
 
     scored_candidates.sort(key=lambda x: x["score"], reverse=True)
 
-    # Verifikasi Visual Multimodal (Tie-Breaker) jika 2 kandidat teratas sangat mirip atau bersaing ketat
+    # Verifikasi Visual Multimodal (Tie-Breaker) HANYA jika kandidat teratas bersaing ketat dan tidak ada pemenang pasti berdasarkan tahun atau harga
     if len(scored_candidates) >= 2 and inquiry_image_bytes:
         top1 = scored_candidates[0]
         top2 = scored_candidates[1]
 
-        # Normalisasi judul model (menghapus tahun rilis seperti (2018), (2013), dsb.)
-        norm1 = normalize_watch_model_title(top1["title"])
-        norm2 = normalize_watch_model_title(top2["title"])
+        # Cek apakah sudah ada pemenang pasti berdasarkan tahun tertera atau harga tertera
+        has_clear_year_winner = (
+            year and year.isdigit() and
+            (f"({year})" in top1["title"] or year in top1["title"]) and
+            not (f"({year})" in top2["title"] or year in top2["title"])
+        )
+        has_clear_price_winner = (
+            extracted_price and
+            abs(top1["price"] - extracted_price) / extracted_price <= 0.05 and
+            abs(top2["price"] - extracted_price) / extracted_price > 0.10
+        )
 
-        # Syarat pemicu tie-breaker:
-        # 1. Model jam tangan sama persis setelah normalisasi (misal: "YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)" vs "(2013)"), ATAU
-        # 2. Selisih skor kurang dari 12000 poin
-        is_same_model = bool(norm1 and norm2 and norm1 == norm2)
-        is_close_score = abs(top1["score"] - top2["score"]) < 12000
+        if not has_clear_year_winner and not has_clear_price_winner:
+            norm1 = normalize_watch_model_title(top1["title"])
+            norm2 = normalize_watch_model_title(top2["title"])
 
-        if (is_same_model or is_close_score) and top1.get("image_url") and top2.get("image_url"):
-            print(f"🔍 Top 2 kandidat bersaing ketat: '{top1['title']}' ({top1['sku']}) skor {top1['score']} vs '{top2['title']}' ({top2['sku']}) skor {top2['score']}. Menjalankan verifikasi visual multimodal...")
-            winner = verify_watch_visually_with_gemini(inquiry_image_bytes, top1, top2)
-            if winner == "B":
-                print(f"🔄 Visual verification memilih Kandidat B ('{top2['title']}' SKU: {top2['sku']}) mengalahkan Kandidat A ('{top1['title']}' SKU: {top1['sku']})")
-                top2["score"] += 30000
-                scored_candidates.sort(key=lambda x: x["score"], reverse=True)
-            elif winner == "A":
-                print(f"✅ Visual verification mengonfirmasi Kandidat A ('{top1['title']}' SKU: {top1['sku']})")
-                top1["score"] += 30000
+            is_same_model = bool(norm1 and norm2 and norm1 == norm2)
+            is_close_score = abs(top1["score"] - top2["score"]) < 8000
+
+            if (is_same_model or is_close_score) and top1.get("image_url") and top2.get("image_url"):
+                print(f"🔍 Top 2 kandidat bersaing ketat: '{top1['title']}' ({top1['sku']}) skor {top1['score']} vs '{top2['title']}' ({top2['sku']}) skor {top2['score']}. Menjalankan verifikasi visual multimodal...")
+                winner = verify_watch_visually_with_gemini(inquiry_image_bytes, top1, top2)
+                if winner == "B":
+                    print(f"🔄 Visual verification memilih Kandidat B ('{top2['title']}' SKU: {top2['sku']}) mengalahkan Kandidat A ('{top1['title']}' SKU: {top1['sku']})")
+                    top2["score"] += 30000
+                    scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+                elif winner == "A":
+                    print(f"✅ Visual verification mengonfirmasi Kandidat A ('{top1['title']}' SKU: {top1['sku']})")
+                    top1["score"] += 30000
 
     best = scored_candidates[0]
     print(f"🏆 Produk Shopify terbaik terpilih: '{best['title']}' (SKU: {best['sku']}) dengan skor: {best['score']}")
@@ -3125,12 +3258,23 @@ def wa_webhook():
         type_msg = message_data.get("typeMessage", "")
 
         image_url = ""
+        jpeg_thumbnail_b64 = None
         quoted_sku = None
 
         if type_msg == "imageMessage":
             file_data = message_data.get("fileMessageData", {})
             caption = file_data.get("caption", "").strip()
             image_url = file_data.get("downloadUrl", "").strip()
+            jpeg_thumbnail_b64 = file_data.get("jpegThumbnail", "").strip()
+        elif type_msg == "documentMessage":
+            file_data = message_data.get("fileMessageData", {})
+            mime_type = file_data.get("mimeType", "").lower()
+            file_name = file_data.get("fileName", "").lower()
+            if mime_type.startswith("image/") or file_name.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                type_msg = "imageMessage"
+                caption = file_data.get("caption", "").strip()
+                image_url = file_data.get("downloadUrl", "").strip()
+                jpeg_thumbnail_b64 = file_data.get("jpegThumbnail", "").strip()
         elif type_msg == "textMessage":
             caption = message_data.get("textMessageData", {}).get("textMessage", "").strip()
         elif type_msg == "extendedTextMessage":
@@ -3153,12 +3297,17 @@ def wa_webhook():
                 print(f"⏭️ Diabaikan: Chat {chat_id} dikecualikan dari fitur identifikasi jam tangan visual.")
                 return jsonify({"status": "ignored", "reason": "Excluded chat/group for watch identification"}), 200
 
-            if not image_url:
-                return jsonify({"status": "ignored", "reason": "Empty image URL"}), 200
+            if not image_url and not jpeg_thumbnail_b64:
+                return jsonify({"status": "ignored", "reason": "Empty image URL and thumbnail"}), 200
 
             caption_log = f" (caption: '{caption}')" if caption else ""
             print(f"📸 Menerima foto jam tangan{caption_log} dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
-            gemini_info = identify_watch_with_gemini(image_url=image_url)
+            gemini_info = identify_watch_with_gemini(
+                image_url=image_url,
+                jpeg_thumbnail=jpeg_thumbnail_b64,
+                chat_id=chat_id,
+                id_message=id_message
+            )
             if not gemini_info:
                 pesan_err = (
                     "⚠️ *IDENTIFIKASI GAGAL*\n"
@@ -3251,7 +3400,12 @@ def wa_webhook():
             )
             if is_action_caption:
                 print(f"📸 Menerima foto dengan caption aksi '{caption}' dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
-                g_info = identify_watch_with_gemini(image_url=image_url)
+                g_info = identify_watch_with_gemini(
+                    image_url=image_url,
+                    jpeg_thumbnail=jpeg_thumbnail_b64,
+                    chat_id=chat_id,
+                    id_message=id_message
+                )
                 if g_info:
                     s_match = find_active_watch_in_shopify(g_info, user_caption=caption)
                     if s_match and s_match.get("sku"):
