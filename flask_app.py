@@ -3633,6 +3633,7 @@ def wa_webhook():
             blogger_res = {"status": "skipped", "message": "Blogger service not configured"}
             is_consign_ps = False
             is_consign_po = False
+            is_featured = False
 
             if service:
                 post = find_blogger_post_by_code(service, sku)
@@ -3641,6 +3642,7 @@ def wa_webhook():
                     post_labels = post.get("labels", [])
                     is_consign_ps = any("CONSIGNMENT_PS" in l.upper() or "CONSINGMENT_PS" in l.upper() for l in post_labels)
                     is_consign_po = any("CONSIGNMENT_PO" in l.upper() or "CONSINGMENT_PO" in l.upper() for l in post_labels) or sku.upper().startswith("CPO")
+                    is_featured = any("FEATURED" in l.upper() for l in post_labels)
                 else:
                     blogger_res = {"status": "not_found", "message": f"Postingan dengan kode {sku} tidak ditemukan di Blogspot."}
 
@@ -3698,7 +3700,9 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
-            if not is_consign_ps and not is_consign_po:
+            if is_featured:
+                pesan_konfirmasi += "⏭️ *Spreadsheet (Slow Moving):* Dilewati (Tidak ada perubahan status untuk REPOST)\n"
+            elif not is_consign_ps and not is_consign_po:
                 pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / CONSIGNMENT_PO)\n"
 
             kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())

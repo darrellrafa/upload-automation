@@ -294,6 +294,7 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("🔁 *LAPORAN REPOST IDWX*", last_wa_msg)
         self.assertIn("3012154", last_wa_msg)
         self.assertIn("Dylan Baru", last_wa_msg)
+        self.assertIn("Spreadsheet (Slow Moving):* Dilewati", last_wa_msg)
 
 if __name__ == "__main__":
     unittest.main()
