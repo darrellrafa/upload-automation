@@ -188,13 +188,46 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         }
 
         with patch("requests.post", return_value=mock_res):
-            sheet_info, form = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]}, return_form=True)
+            sheet_info, form, owner = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]}, return_form=True)
             self.assertEqual(sheet_info, "PHOTO STUDIO (Baris 2819)")
             self.assertIn("Nama : Said", form)
+            self.assertEqual(owner, "")
 
             # Test backwards compatibility when return_form=False
             sheet_info_only = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]})
             self.assertEqual(sheet_info_only, "PHOTO STUDIO (Baris 2819)")
+
+    def test_identification_message_with_owner_for_slow_moving(self):
+        msg = format_watch_identification_message(
+            title="DATEJUST 28MM TWOTONE YELLOWGOLD SILVER DIAMOND STAR DIAL ROMAN ON IX (2018)",
+            sku="GW036128",
+            formatted_price="Rp 219,800,000",
+            sheet_info="ALL STOCK (Baris 284)",
+            location="Ready di Toko",
+            owner="ES"
+        )
+        self.assertIn("📊 *Spreadsheet:* ALL STOCK (Baris 284)\n*Owner:* ES\n", msg)
+        self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
+        self.assertNotIn("Nama :", msg)
+
+    def test_resolve_watch_spreadsheet_location_returns_owner_for_all_stock(self):
+        from unittest.mock import patch, MagicMock
+        from flask_app import resolve_watch_spreadsheet_location
+
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "status": "success",
+            "tab_name": "ALL STOCK",
+            "row": 284,
+            "owner": "ES"
+        }
+
+        with patch("requests.post", return_value=mock_res):
+            sheet_info, form, owner = resolve_watch_spreadsheet_location("GW036128", blogger_post=None, return_form=True)
+            self.assertEqual(sheet_info, "ALL STOCK (Baris 284)")
+            self.assertEqual(form, "")
+            self.assertEqual(owner, "ES")
 
     def test_find_active_watch_cpo_preference_for_photo_owner(self):
         from unittest.mock import patch

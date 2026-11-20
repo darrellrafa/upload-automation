@@ -126,6 +126,62 @@ class TestWebhookFlowSimulation(unittest.TestCase):
 
     @patch("flask_app.kirim_balasan_wa")
     @patch("flask_app.get_watch_photo_url")
+    @patch("flask_app.get_blogger_service")
+    @patch("flask_app.resolve_watch_spreadsheet_location")
+    @patch("flask_app.find_active_watch_in_shopify")
+    @patch("flask_app.identify_watch_with_gemini")
+    def test_photo_identification_slow_moving_with_owner(self, mock_gemini, mock_shopify, mock_sheet, mock_blog, mock_photo, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        mock_blog.return_value = None
+        mock_photo.return_value = "https://example.com/photo.jpg"
+
+        mock_gemini.return_value = {
+            "brand": "Rolex",
+            "model": "Datejust 28mm",
+            "dial_color": "Silver Diamond",
+            "search_query": "Rolex Datejust 28mm GW036128"
+        }
+        mock_shopify.return_value = {
+            "title": "DATEJUST 28MM TWOTONE YELLOWGOLD SILVER DIAMOND STAR DIAL ROMAN ON IX (2018)",
+            "sku": "GW036128",
+            "numeric_price": 219800000.0,
+            "formatted_price": "Rp 219,800,000",
+            "product_node": {"id": "456", "title": "DATEJUST 28MM"},
+            "variant_node": {"sku": "GW036128"}
+        }
+        mock_sheet.return_value = ("ALL STOCK (Baris 284)", "", "ES")
+
+        photo_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-sm-001",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "Dylan Baru"
+            },
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": "https://example.com/watch.jpg",
+                    "caption": "identifikasi"
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=photo_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "success")
+        self.assertEqual(res.get("action"), "identify_watch")
+        self.assertEqual(res.get("owner"), "ES")
+
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("📊 *Spreadsheet:* ALL STOCK (Baris 284)\n*Owner:* ES\n", last_wa_msg)
+        self.assertNotIn("Nama :", last_wa_msg)
+        self.assertIn("• Ketik *sold* untuk menandai laku", last_wa_msg)
+
+    @patch("flask_app.kirim_balasan_wa")
+    @patch("flask_app.get_watch_photo_url")
     @patch("flask_app.update_slow_moving_status_sheet")
     @patch("flask_app.update_consignment_status_sheet")
     @patch("flask_app.update_shopify_takedown")

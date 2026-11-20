@@ -163,6 +163,7 @@ function doPost(e) {
       var matchedCellSku = "";
       var matchedBrand = "";
       var matchedDesc = "";
+      var matchedOwner = "";
       var oldPriceVal = "";
       var oldStatusVal = "";
 
@@ -245,6 +246,7 @@ function doPost(e) {
           matchedCellSku = serialCell || refCell;
           matchedBrand = mapping.colBrand > 0 ? (rowData[mapping.colBrand - 1] || "").toString().trim() : "";
           matchedDesc = mapping.colDesc > 0 ? (rowData[mapping.colDesc - 1] || "").toString().trim() : "";
+          matchedOwner = mapping.colOwner > 0 ? (rowData[mapping.colOwner - 1] || "").toString().trim() : ((rowData.length > 4 ? rowData[4] : "") || "").toString().trim();
           oldPriceVal = mapping.colPrice > 0 ? (rowData[mapping.colPrice - 1] || "").toString().trim() : "";
           oldStatusVal = statusCell;
           break; // Temukan baris aktif terbaik dan hentikan pencarian
@@ -259,6 +261,7 @@ function doPost(e) {
         matchedCellSku = (mapping.colSerial > 0 ? soldRowData[mapping.colSerial - 1] : "") || "";
         matchedBrand = mapping.colBrand > 0 ? (soldRowData[mapping.colBrand - 1] || "").toString().trim() : "";
         matchedDesc = mapping.colDesc > 0 ? (soldRowData[mapping.colDesc - 1] || "").toString().trim() : "";
+        matchedOwner = mapping.colOwner > 0 ? (soldRowData[mapping.colOwner - 1] || "").toString().trim() : ((soldRowData.length > 4 ? soldRowData[4] : "") || "").toString().trim();
         oldPriceVal = mapping.colPrice > 0 ? (soldRowData[mapping.colPrice - 1] || "").toString().trim() : "";
         oldStatusVal = "SOLD";
       }
@@ -283,6 +286,7 @@ function doPost(e) {
           "sku": matchedCellSku || inputSku,
           "brand": matchedBrand,
           "description": matchedDesc,
+          "owner": matchedOwner,
           "price": oldPriceVal,
           "current_status": oldStatusVal
         })).setMimeType(ContentService.MimeType.JSON);
