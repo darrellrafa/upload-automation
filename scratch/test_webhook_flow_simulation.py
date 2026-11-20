@@ -244,5 +244,56 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("CPO-280826-03", last_wa_msg)
         self.assertIn("Rp 359,000,000", last_wa_msg)
 
+    @patch("flask_app.kirim_balasan_wa")
+    @patch("flask_app.update_blogger_repost")
+    @patch("flask_app.find_blogger_post_by_code")
+    @patch("flask_app.get_blogger_service")
+    def test_repost_command_flow_success(self, mock_blog_service, mock_find_post, mock_update_repost, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        mock_blog_service.return_value = MagicMock()
+        mock_post = {
+            "id": "post-3012154",
+            "title": "VACHERON CONSTANTIN HISTORIQUES AMERICAN 1921",
+            "labels": ["FEATURED"],
+            "published": "2026-11-01T10:00:00Z"
+        }
+        mock_find_post.return_value = mock_post
+        mock_update_repost.return_value = {
+            "status": "success",
+            "post_title": "VACHERON CONSTANTIN HISTORIQUES AMERICAN 1921",
+            "publish_date": "20/11/26 12:30 WIB"
+        }
+
+        repost_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-repost-001",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "Dylan Baru"
+            },
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {
+                    "textMessage": "Repost 3012154"
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=repost_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "success")
+        self.assertEqual(res.get("command"), "REPOST")
+        self.assertEqual(res.get("sku"), "3012154")
+        self.assertIn("spreadsheet_slow_moving", res)
+        self.assertEqual(res["spreadsheet_slow_moving"]["status"], "skipped")
+
+        # Verify WA message
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("🔁 *LAPORAN REPOST IDWX*", last_wa_msg)
+        self.assertIn("3012154", last_wa_msg)
+        self.assertIn("Dylan Baru", last_wa_msg)
+
 if __name__ == "__main__":
     unittest.main()

@@ -3662,6 +3662,9 @@ def wa_webhook():
             else:
                 print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PO atau Blogspot gagal.")
 
+            # Inisialisasi status spreadsheet Slow Moving (Dilewati untuk REPOST)
+            sheet_slow_moving_res = {"status": "skipped", "message": "Dilewati (Tidak ada perubahan spreadsheet Slow Moving untuk REPOST)"}
+
             # Kirim Balasan Laporan Lengkap ke WhatsApp
             status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
 
