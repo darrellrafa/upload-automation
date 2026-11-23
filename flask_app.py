@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import threading
 import base64
 import html
 from html.parser import HTMLParser
@@ -157,11 +158,242 @@ EXCLUDED_IDENTIFICATION_TARGETS = [
 # Gemini API Key & Vision Multimodal
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-# Memory Penyimpanan Jam Teridentifikasi Sementara (In-Memory Session dengan TTL)
+# Penyimpanan Sesi Identifikasi Jam Tangan Bersama Lintas Worker (Multi-Worker Shared Session)
 # Key: chat_id -> Value: dict {sku, title, formatted_price, numeric_price, sheet_info, timestamp}
-ACTIVE_IDENTIFIED_WATCHES = OrderedDict()
 MAX_ACTIVE_WATCHES = 100
-IDENTIFIED_WATCH_TTL = 1800  # 30 menit
+IDENTIFIED_WATCH_TTL = 120  # 2 menit (120 detik)
+EXPIRED_SESSION_TTL = 900   # 15 menit riwayat sesi kedaluwarsa
+
+SESSION_LOCK = threading.RLock()
+ACTIVE_SESSIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_identified_sessions.json")
+
+def load_session_store_from_disk():
+    """Membaca data sesi aktif dan kedaluwarsa dari file JSON bersama."""
+    with SESSION_LOCK:
+        if not os.path.exists(ACTIVE_SESSIONS_FILE):
+            return {"active": {}, "expired": {}}
+        try:
+            with open(ACTIVE_SESSIONS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    if "active" not in data and "expired" not in data:
+                        return {"active": data, "expired": {}}
+                    return {
+                        "active": data.get("active", {}),
+                        "expired": data.get("expired", {})
+                    }
+                return {"active": {}, "expired": {}}
+        except Exception as e:
+            print(f"⚠️ Gagal membaca active_identified_sessions.json: {e}")
+            return {"active": {}, "expired": {}}
+
+def save_session_store_to_disk(store):
+    """Menyimpan data sesi aktif dan kedaluwarsa ke file JSON bersama secara atomik."""
+    with SESSION_LOCK:
+        try:
+            temp_file = ACTIVE_SESSIONS_FILE + f".tmp.{os.getpid()}"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(store, f, indent=2, ensure_ascii=False)
+            os.replace(temp_file, ACTIVE_SESSIONS_FILE)
+        except Exception as e:
+            print(f"⚠️ Gagal menyimpan active_identified_sessions.json: {e}")
+
+class MultiWorkerSessionDict(OrderedDict):
+    """
+    Koleksi sesi identifikasi yang secara otomatis tersinkronisasi
+    antara memori lokal dan file penyimpanan bersama di disk (active_identified_sessions.json)
+    sehingga konsisten di seluruh worker proses PythonAnywhere.
+    """
+    def _sync_from_disk(self):
+        if getattr(self, "_syncing", False):
+            return
+        self._syncing = True
+        try:
+            store = load_session_store_from_disk()
+            active = store.get("active", {})
+            now = time.time()
+            for k, v in list(active.items()):
+                if (now - v.get("timestamp", 0)) <= IDENTIFIED_WATCH_TTL:
+                    super().__setitem__(k, v)
+                else:
+                    super().pop(k, None)
+        finally:
+            self._syncing = False
+
+    def __contains__(self, key):
+        if not getattr(self, "_syncing", False):
+            self._sync_from_disk()
+        return super().__contains__(key)
+
+    def __getitem__(self, key):
+        if not getattr(self, "_syncing", False):
+            self._sync_from_disk()
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if not getattr(self, "_syncing", False):
+            self._sync_from_disk()
+        return super().get(key, default)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if len(self) > MAX_ACTIVE_WATCHES:
+            super().popitem(last=False)
+        if not getattr(self, "_syncing", False):
+            store = load_session_store_from_disk()
+            store.setdefault("active", {})[key] = value
+            save_session_store_to_disk(store)
+            if isinstance(value, dict) and "timestamp" in value:
+                schedule_session_auto_cancel(key, value["timestamp"], wait_seconds=IDENTIFIED_WATCH_TTL)
+
+    def pop(self, key, default=None):
+        val = super().pop(key, None)
+        if not getattr(self, "_syncing", False):
+            store = load_session_store_from_disk()
+            disk_val = store.get("active", {}).pop(key, None)
+            save_session_store_to_disk(store)
+            return val if val is not None else (disk_val if disk_val is not None else default)
+        return val if val is not None else default
+
+    def clear(self):
+        super().clear()
+        save_session_store_to_disk({"active": {}, "expired": {}})
+
+ACTIVE_IDENTIFIED_WATCHES = MultiWorkerSessionDict()
+
+def get_identified_session(chat_id):
+    """
+    Mengambil sesi identifikasi untuk chat_id.
+    Mengembalikan tuple: (active_session, expired_session)
+    - Jika sesi aktif (<= IDENTIFIED_WATCH_TTL): mengembalikan (active_session, None)
+    - Jika sesi aktif ada tapi kedaluwarsa (> IDENTIFIED_WATCH_TTL): dipindahkan ke expired, mengembalikan (None, expired_session)
+    - Jika sudah ada di expired (<= EXPIRED_SESSION_TTL): mengembalikan (None, expired_session)
+    - Jika tidak ada sama sekali: mengembalikan (None, None)
+    """
+    if not chat_id:
+        return None, None
+    store = load_session_store_from_disk()
+    active_map = store.get("active", {})
+    expired_map = store.get("expired", {})
+
+    now = time.time()
+    session = active_map.get(chat_id)
+    if not session and chat_id in ACTIVE_IDENTIFIED_WATCHES:
+        session = ACTIVE_IDENTIFIED_WATCHES.get(chat_id)
+
+    if session:
+        session_ts = session.get("timestamp", 0)
+        if (now - session_ts) <= IDENTIFIED_WATCH_TTL:
+            return session, None
+        else:
+            active_map.pop(chat_id, None)
+            super(MultiWorkerSessionDict, ACTIVE_IDENTIFIED_WATCHES).pop(chat_id, None)
+            session["expired_at"] = now
+            expired_map[chat_id] = session
+            clean_expired = {cid: s for cid, s in expired_map.items() if (now - s.get("expired_at", s.get("timestamp", 0))) <= EXPIRED_SESSION_TTL}
+            save_session_store_to_disk({"active": active_map, "expired": clean_expired})
+            return None, session
+
+    exp_session = expired_map.get(chat_id)
+    if exp_session:
+        exp_ts = exp_session.get("expired_at", exp_session.get("timestamp", 0))
+        if (now - exp_ts) <= EXPIRED_SESSION_TTL:
+            return None, exp_session
+        else:
+            expired_map.pop(chat_id, None)
+            save_session_store_to_disk({"active": active_map, "expired": expired_map})
+
+    return None, None
+
+def save_identified_session(chat_id, session_data):
+    """Menyimpan sesi identifikasi baru ke memori dan disk serta mengaktifkan timer pembatalan otomatis 2 menit."""
+    if not chat_id or not session_data:
+        return
+    ACTIVE_IDENTIFIED_WATCHES[chat_id] = session_data
+
+def pop_identified_session(chat_id):
+    """Menghapus dan mengembalikan sesi identifikasi dari disk dan memori."""
+    if not chat_id:
+        return None, None
+    store = load_session_store_from_disk()
+    active_map = store.get("active", {})
+    expired_map = store.get("expired", {})
+
+    now = time.time()
+    session = active_map.pop(chat_id, None)
+    mem_session = super(MultiWorkerSessionDict, ACTIVE_IDENTIFIED_WATCHES).pop(chat_id, None)
+    sess_obj = session or mem_session
+
+    if sess_obj:
+        session_ts = sess_obj.get("timestamp", 0)
+        is_expired = (now - session_ts) > IDENTIFIED_WATCH_TTL
+        if is_expired:
+            sess_obj["expired_at"] = now
+            expired_map[chat_id] = sess_obj
+            save_session_store_to_disk({"active": active_map, "expired": expired_map})
+            return None, sess_obj
+        else:
+            save_session_store_to_disk({"active": active_map, "expired": expired_map})
+            return sess_obj, None
+
+    exp_session = expired_map.get(chat_id)
+    if exp_session:
+        exp_ts = exp_session.get("expired_at", exp_session.get("timestamp", 0))
+        if (now - exp_ts) <= EXPIRED_SESSION_TTL:
+            return None, exp_session
+        else:
+            expired_map.pop(chat_id, None)
+            save_session_store_to_disk({"active": active_map, "expired": expired_map})
+
+    return None, None
+
+def clear_session_store():
+    """Membersihkan seluruh sesi identifikasi aktif & kedaluwarsa (untuk testing & reset)."""
+    with SESSION_LOCK:
+        super(MultiWorkerSessionDict, ACTIVE_IDENTIFIED_WATCHES).clear()
+        save_session_store_to_disk({"active": {}, "expired": {}})
+        if os.path.exists(ACTIVE_SESSIONS_FILE):
+            try:
+                os.remove(ACTIVE_SESSIONS_FILE)
+            except Exception:
+                pass
+
+def schedule_session_auto_cancel(chat_id, session_timestamp, wait_seconds=120):
+    """
+    Menjalankan timer di background thread selama wait_seconds (120 detik / 2 menit).
+    Jika setelah 2 menit sesi belum diambil/dieksekusi, sesi dibatalkan otomatis dan mengirim notifikasi WA.
+    """
+    def _timer_worker():
+        time.sleep(wait_seconds)
+        store = load_session_store_from_disk()
+        active_map = store.get("active", {})
+        expired_map = store.get("expired", {})
+        session = active_map.get(chat_id)
+
+        # Pastikan sesi masih ada dan timestamp-nya cocok (artinya belum di-action dan belum ditimpa sesi baru)
+        if session and session.get("timestamp") == session_timestamp:
+            active_map.pop(chat_id, None)
+            super(MultiWorkerSessionDict, ACTIVE_IDENTIFIED_WATCHES).pop(chat_id, None)
+            now = time.time()
+            session["expired_at"] = now
+            expired_map[chat_id] = session
+            save_session_store_to_disk({"active": active_map, "expired": expired_map})
+
+            title = session.get("title", "Jam Tangan")
+            sku = session.get("sku", "")
+            sku_info = f" (`{sku}`)" if sku else ""
+            print(f"⏱️ Sesi identifikasi untuk chat_id {chat_id} ({title}) otomatis dibatalkan karena tidak ada tindakan dalam {wait_seconds}s.")
+
+            pesan_auto_cancel = (
+                "⏱️ *SESI IDENTIFIKASI HABIS (2 MENIT)*\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                f"Sesi aksi cepat untuk *{title}*{sku_info} telah otomatis dibatalkan karena tidak ada tindakan yang dipilih dalam waktu 2 menit.\n\n"
+                "Silakan kirim foto kembali jika ingin melakukan aksi cepat (sold, reprice, on hold, dll)."
+            )
+            kirim_balasan_wa(chat_id, pesan_auto_cancel)
+
+    t = threading.Thread(target=_timer_worker, daemon=True)
+    t.start()
 
 # Cache Token Shopify
 SHOPIFY_ACCESS_TOKEN = None
@@ -3468,8 +3700,8 @@ def wa_webhook():
                 owner = ""
                 sales = ""
 
-            # Simpan ke sesi jam tangan aktif per chat_id
-            ACTIVE_IDENTIFIED_WATCHES[chat_id] = {
+            # Simpan ke sesi jam tangan aktif bersama (disk & memori)
+            session_data = {
                 "sku": matched_sku,
                 "title": matched_title,
                 "formatted_price": formatted_price,
@@ -3481,8 +3713,7 @@ def wa_webhook():
                 "location": matched_location,
                 "timestamp": time.time()
             }
-            if len(ACTIVE_IDENTIFIED_WATCHES) > MAX_ACTIVE_WATCHES:
-                ACTIVE_IDENTIFIED_WATCHES.popitem(last=False)
+            save_identified_session(chat_id, session_data)
 
             # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk status lokasi dinamis, form konsinyasi, atau owner/sales)
             pesan_id = format_watch_identification_message(
@@ -3515,23 +3746,59 @@ def wa_webhook():
         # JALUR PEMBATALAN / ABAIKAN IDENTIFIKASI
         # ======================================================================
         if is_cancellation_chat(caption):
-            last_watch = ACTIVE_IDENTIFIED_WATCHES.pop(chat_id, None)
-            if last_watch:
+            active_watch, expired_watch = pop_identified_session(chat_id)
+            if active_watch:
                 pesan_batal = (
                     "❌ *Identifikasi jam tangan dibatalkan.*\n"
-                    f"Tidak ada perubahan yang dilakukan untuk *{last_watch.get('title', 'produk')}* (`{last_watch.get('sku', '')}`)."
+                    f"Tidak ada perubahan yang dilakukan untuk *{active_watch.get('title', 'produk')}* (`{active_watch.get('sku', '')}`)."
+                )
+            elif expired_watch:
+                pesan_batal = (
+                    "⏱️ *SESI IDENTIFIKASI SUDAH KEDALUWARSA (2 MENIT)*\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    f"Sesi untuk *{expired_watch.get('title', 'produk')}* sebelumnya telah otomatis dibatalkan karena tidak ada tindakan dalam 2 menit.\n\n"
+                    "Tidak ada perubahan status/harga yang dilakukan."
                 )
             else:
                 pesan_batal = "ℹ️ *Tidak ada sesi identifikasi jam tangan yang aktif.*"
             kirim_balasan_wa(chat_id, pesan_batal)
-            return jsonify({"status": "cancelled", "watch": last_watch}), 200
+            return jsonify({"status": "cancelled", "watch": active_watch or expired_watch}), 200
 
-        # Resolusi fallback SKU dari quoted message atau sesi identifikasi aktif
+        # Resolusi fallback SKU dari quoted message atau sesi identifikasi aktif lintas worker
         fallback_sku = quoted_sku
-        if not fallback_sku and chat_id in ACTIVE_IDENTIFIED_WATCHES:
-            session = ACTIVE_IDENTIFIED_WATCHES.get(chat_id)
-            if session and (time.time() - session.get("timestamp", 0)) <= IDENTIFIED_WATCH_TTL:
-                fallback_sku = session.get("sku")
+        active_sess = None
+        expired_sess = None
+        if not fallback_sku:
+            active_sess, expired_sess = get_identified_session(chat_id)
+            if active_sess:
+                fallback_sku = active_sess.get("sku")
+
+        # Cek apakah user mengirim perintah aksi cepat tanpa SKU saat sesi sudah kedaluwarsa atau tidak ada
+        is_bare_action = (
+            caption.lower().strip() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"]
+            or bool(re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', caption.strip(), re.IGNORECASE))
+        )
+        if is_bare_action and not fallback_sku and not (type_msg == "imageMessage" and image_url):
+            if expired_sess:
+                title_exp = expired_sess.get("title", "produk")
+                sku_exp = expired_sess.get("sku", "")
+                sku_str = f" (`{sku_exp}`)" if sku_exp else ""
+                pesan_exp = (
+                    "⏱️ *SESI IDENTIFIKASI KEDALUWARSA (2 MENIT)*\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    f"Sesi aksi cepat untuk *{title_exp}*{sku_str} telah otomatis dibatalkan karena melebihi batas waktu 2 menit tanpa tindakan.\n\n"
+                    "Tidak ada perubahan status/harga yang dilakukan. Silakan kirim foto kembali jika ingin melakukan aksi cepat."
+                )
+                kirim_balasan_wa(chat_id, pesan_exp)
+                return jsonify({"status": "expired", "reason": "Identification session expired (> 2 mins)"}), 200
+            else:
+                pesan_no_sess = (
+                    "ℹ️ *Tidak ada sesi identifikasi jam tangan yang aktif.*\n\n"
+                    "Silakan kirim foto jam tangan terlebih dahulu atau sertakan SKU pada pesan Anda.\n"
+                    "Contoh: *sold [SKU]* atau *reprice [SKU] [harga]*"
+                )
+                kirim_balasan_wa(chat_id, pesan_no_sess)
+                return jsonify({"status": "ignored", "reason": "No active session for bare action"}), 200
 
         # Jika user mengirim foto dengan caption aksi langsung tanpa mengetik SKU (misal: foto + "sold", foto + "reprice 650jt"):
         if type_msg == "imageMessage" and image_url and not fallback_sku and not is_chat_excluded_from_identification(chat_id):
@@ -3558,7 +3825,7 @@ def wa_webhook():
         # ======================================================================
         reprice_cmd = parse_reprice_chat(caption, fallback_sku=fallback_sku)
         if reprice_cmd:
-            ACTIVE_IDENTIFIED_WATCHES.pop(chat_id, None)
+            pop_identified_session(chat_id)
             sku = reprice_cmd["code"]
             cmd_type = reprice_cmd["command_type"]
             formatted_price = reprice_cmd["formatted_price"]
@@ -3702,7 +3969,7 @@ def wa_webhook():
         # ======================================================================
         takedown_cmd = parse_takedown_chat(caption, fallback_sku=fallback_sku)
         if takedown_cmd:
-            ACTIVE_IDENTIFIED_WATCHES.pop(chat_id, None)
+            pop_identified_session(chat_id)
             sku = takedown_cmd["code"]
             cmd_type = takedown_cmd["command_type"]
             status_text = takedown_cmd["status_text"]

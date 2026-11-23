@@ -440,5 +440,115 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         # Pastikan Gemini Vision TIDAK dipanggil karena tidak ada kata 'identifikasi'
         mock_gemini.assert_not_called()
 
+    @patch("flask_app.kirim_balasan_wa")
+    def test_auto_cancel_timer_feedback_after_timeout(self, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        import time
+        ts = time.time()
+        session_data = {
+            "sku": "5P87D725-1",
+            "title": "DAYTONA STEEL BLACK DIAL CERAMIC BEZEL (2017)",
+            "formatted_price": "Rp 430,000,000",
+            "numeric_price": 430000000.0,
+            "sheet_info": "PHOTO STUDIO (Baris 2856)",
+            "timestamp": ts
+        }
+        # Simpan sesi
+        ACTIVE_IDENTIFIED_WATCHES[chat_id] = session_data
+        self.assertIn(chat_id, ACTIVE_IDENTIFIED_WATCHES)
+
+        # Trigger auto cancel dengan wait_seconds=0.01 detik
+        flask_app.schedule_session_auto_cancel(chat_id, ts, wait_seconds=0.01)
+        import time
+        time.sleep(0.05)
+
+        # Sesi harus sudah terhapus otomatis
+        self.assertNotIn(chat_id, ACTIVE_IDENTIFIED_WATCHES)
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("⏱️ *SESI IDENTIFIKASI HABIS (2 MENIT)*", last_wa_msg)
+        self.assertIn("DAYTONA STEEL BLACK DIAL CERAMIC BEZEL (2017)", last_wa_msg)
+        self.assertIn("5P87D725-1", last_wa_msg)
+
+    @patch("flask_app.kirim_balasan_wa")
+    def test_expired_session_response_on_batal(self, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        import time
+        old_ts = time.time() - 200  # 200 detik lalu (> 120s)
+        # Langsung simpan sesi lama ke store
+        store = flask_app.load_session_store_from_disk()
+        store["active"][chat_id] = {
+            "sku": "5P87D725-1",
+            "title": "DAYTONA STEEL BLACK DIAL CERAMIC BEZEL (2017)",
+            "timestamp": old_ts
+        }
+        flask_app.save_session_store_to_disk(store)
+
+        batal_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-batal-expired",
+            "senderData": {"chatId": chat_id, "senderName": "Dylan Baru"},
+            "messageData": {"typeMessage": "textMessage", "textMessageData": {"textMessage": "batal"}}
+        }
+        flask_app.request.get_json = MagicMock(return_value=batal_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "cancelled")
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("⏱️ *SESI IDENTIFIKASI SUDAH KEDALUWARSA (2 MENIT)*", last_wa_msg)
+        self.assertIn("DAYTONA STEEL BLACK DIAL CERAMIC BEZEL (2017)", last_wa_msg)
+
+    @patch("flask_app.kirim_balasan_wa")
+    def test_expired_session_response_on_bare_action(self, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        import time
+        old_ts = time.time() - 200  # 200 detik lalu (> 120s)
+        store = flask_app.load_session_store_from_disk()
+        store["active"][chat_id] = {
+            "sku": "5P87D725-1",
+            "title": "DAYTONA STEEL BLACK DIAL CERAMIC BEZEL (2017)",
+            "timestamp": old_ts
+        }
+        flask_app.save_session_store_to_disk(store)
+
+        sold_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-sold-expired",
+            "senderData": {"chatId": chat_id, "senderName": "Dylan Baru"},
+            "messageData": {"typeMessage": "textMessage", "textMessageData": {"textMessage": "sold"}}
+        }
+        flask_app.request.get_json = MagicMock(return_value=sold_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "expired")
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("⏱️ *SESI IDENTIFIKASI KEDALUWARSA (2 MENIT)*", last_wa_msg)
+        self.assertIn("DAYTONA STEEL BLACK DIAL CERAMIC BEZEL (2017)", last_wa_msg)
+
+    @patch("flask_app.kirim_balasan_wa")
+    def test_bare_action_without_any_session_returns_guidance(self, mock_kirim_wa):
+        chat_id = "test-group@g.us"
+        flask_app.clear_session_store()
+
+        sold_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-sold-no-sess",
+            "senderData": {"chatId": chat_id, "senderName": "Dylan Baru"},
+            "messageData": {"typeMessage": "textMessage", "textMessageData": {"textMessage": "sold"}}
+        }
+        flask_app.request.get_json = MagicMock(return_value=sold_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "ignored")
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("ℹ️ *Tidak ada sesi identifikasi jam tangan yang aktif.*", last_wa_msg)
+        self.assertIn("sold [SKU]", last_wa_msg)
+
 if __name__ == "__main__":
     unittest.main()
