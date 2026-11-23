@@ -3875,29 +3875,71 @@ def wa_webhook():
             # 3. Update Google Spreadsheet
             canonical_sku = shopify_res.get("matched_sku") or (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
             
-            # 3a. Update Spreadsheet Consignment PS (HANYA jika CONSIGNMENT_PS)
+            updated_in_sheet = False
+
+            # 3a. Update Spreadsheet Consignment PS (jika ada label CONSIGNMENT_PS)
             sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
             if is_consign_ps:
                 print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO)...")
-                sheet_consign_ps_res = update_consignment_ps_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
-            else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS.")
+                res_ps = update_consignment_ps_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
+                sheet_consign_ps_res = res_ps
+                if res_ps.get("status") == "success":
+                    updated_in_sheet = True
 
-            # 3b. Update Spreadsheet Consignment PO (HANYA jika CONSIGNMENT_PO)
+            # 3b. Update Spreadsheet Consignment PO (jika ada label CONSIGNMENT_PO atau CPO)
             sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
-            if is_consign_po:
-                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER)...")
-                sheet_consign_po_res = update_consignment_po_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
-            else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PO.")
+            if is_consign_po or sku.upper().startswith("CPO"):
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO / CPO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER)...")
+                res_po = update_consignment_po_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
+                sheet_consign_po_res = res_po
+                if res_po.get("status") == "success":
+                    updated_in_sheet = True
 
-            # 3c. Update Spreadsheet Slow Moving (HANYA jika FEATURED)
+            # 3c. Update Spreadsheet Slow Moving (jika ada label FEATURED)
             sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
             if is_featured:
                 print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (Tab ALL STOCK)...")
-                sheet_slow_moving_res = update_slow_moving_sheet(sku, cmd_type, formatted_price, numeric_price, canonical_sku=canonical_sku)
-            else:
-                print(f"ℹ️ Produk '{sku}' BUKAN FEATURED.")
+                res_feat = update_slow_moving_sheet(sku, cmd_type, formatted_price, numeric_price, canonical_sku=canonical_sku)
+                sheet_slow_moving_res = res_feat
+                if res_feat.get("status") == "success":
+                    updated_in_sheet = True
+
+            # 3d. SMART FALLBACK jika belum terupdate (misal Blogspot tidak memiliki label yang sesuai)
+            if not updated_in_sheet:
+                print(f"🔍 Mencari SKU '{canonical_sku}' langsung di Google Spreadsheet untuk Reprice (Smart Fallback)...")
+                target_sheet = "PHOTO OWNER" if sku.upper().startswith("CPO") else "PHOTO STUDIO"
+                res_primary = update_consignment_sheet(canonical_sku, cmd_type, formatted_price, numeric_price, sheet_name=target_sheet)
+                if res_primary.get("status") == "success":
+                    if target_sheet == "PHOTO OWNER":
+                        is_consign_po = True
+                        sheet_consign_po_res = res_primary
+                    else:
+                        is_consign_ps = True
+                        sheet_consign_ps_res = res_primary
+                    updated_in_sheet = True
+                    print(f"✅ SKU '{canonical_sku}' berhasil ditemukan dan di-reprice di Consignment Tab {target_sheet} (Baris {res_primary.get('row', '-')})")
+                else:
+                    alt_sheet = "PHOTO STUDIO" if target_sheet == "PHOTO OWNER" else "PHOTO OWNER"
+                    res_alt = update_consignment_sheet(canonical_sku, cmd_type, formatted_price, numeric_price, sheet_name=alt_sheet)
+                    if res_alt.get("status") == "success":
+                        if alt_sheet == "PHOTO OWNER":
+                            is_consign_po = True
+                            sheet_consign_po_res = res_alt
+                        else:
+                            is_consign_ps = True
+                            sheet_consign_ps_res = res_alt
+                        updated_in_sheet = True
+                        print(f"✅ SKU '{canonical_sku}' berhasil ditemukan dan di-reprice di Consignment Tab {alt_sheet} (Baris {res_alt.get('row', '-')})")
+                    else:
+                        print(f"🔍 SKU '{sku}' tidak ditemukan di Consignment. Memeriksa Spreadsheet Slow Moving (Tab ALL STOCK)...")
+                        res_sm = update_slow_moving_sheet(sku, cmd_type, formatted_price, numeric_price, canonical_sku=canonical_sku)
+                        if res_sm.get("status") == "success":
+                            is_featured = True
+                            sheet_slow_moving_res = res_sm
+                            updated_in_sheet = True
+                            print(f"✅ Ditemukan dan berhasil di-reprice di Spreadsheet Slow Moving (Baris {res_sm.get('row', '-')}, Tab {res_sm.get('tab_name', '-')})")
+                        else:
+                            print(f"ℹ️ SKU '{sku}' juga tidak ditemukan di Slow Moving.")
 
             # 4. Kirim Balasan Laporan Lengkap ke WhatsApp
             status_blog_icon = "✅" if blogger_res.get("status") == "success" else "⚠️"
@@ -4027,24 +4069,35 @@ def wa_webhook():
             sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
             sheet_slow_moving_res = {"status": "skipped", "message": "Bukan tag FEATURED"}
 
-            if post and blogger_res.get("status") == "success":
-                # Jika postingan Blogspot ada dan berhasil dipindahkan ke Sampah
-                if is_consign_ps:
-                    print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO) status ke '{status_text}'...")
-                    sheet_consign_ps_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO STUDIO")
-                elif is_consign_po:
-                    print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER) status ke '{status_text}'...")
-                    sheet_consign_po_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
-                else:
-                    print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau CONSIGNMENT_PO.")
+            updated_in_sheet = False
 
-                if is_featured:
-                    print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (Tab ALL STOCK) status ke '{status_text}'...")
-                    sheet_slow_moving_res = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
-            else:
-                # KONDISI KHUSUS: Postingan Blogspot tidak ditemukan atau dibatalkan karena benturan merek
-                # Tetap periksa dan update Google Spreadsheet yang relevan
-                print(f"ℹ️ Memeriksa Google Spreadsheet untuk SKU '{sku}' (canonical: '{canonical_sku}')...")
+            # Prioritas 1: Berdasarkan Label Blogspot (jika ada)
+            if is_consign_ps:
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO) status ke '{status_text}'...")
+                res_ps = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO STUDIO")
+                sheet_consign_ps_res = res_ps
+                if res_ps.get("status") == "success":
+                    updated_in_sheet = True
+
+            elif is_consign_po or sku.upper().startswith("CPO"):
+                print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO / CPO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER) status ke '{status_text}'...")
+                res_po = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
+                sheet_consign_po_res = res_po
+                if res_po.get("status") == "success":
+                    updated_in_sheet = True
+
+            if is_featured:
+                print(f"⭐ Produk '{canonical_sku}' memiliki label FEATURED. Memperbarui Google Spreadsheet Slow Moving (Tab ALL STOCK) status ke '{status_text}'...")
+                res_feat = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
+                sheet_slow_moving_res = res_feat
+                if res_feat.get("status") == "success":
+                    updated_in_sheet = True
+
+            # Prioritas 2 (SMART FALLBACK): Jika belum berhasil diperbarui di spreadsheet manapun
+            # (misal karena postingan Blogspot tidak punya label CONSIGNMENT_PS/PO/FEATURED, label belum lengkap, atau postingan tidak ada di Blogspot),
+            # lakukan pencarian langsung ke Google Spreadsheet (PHOTO STUDIO, PHOTO OWNER, dan Slow Moving).
+            if not updated_in_sheet:
+                print(f"🔍 Mencari SKU '{canonical_sku}' langsung di Google Spreadsheet (Smart Fallback)...")
                 target_sheet = "PHOTO OWNER" if sku.upper().startswith("CPO") else "PHOTO STUDIO"
                 sheet_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name=target_sheet)
 
@@ -4055,6 +4108,8 @@ def wa_webhook():
                     else:
                         is_consign_ps = True
                         sheet_consign_ps_res = sheet_res
+                    updated_in_sheet = True
+                    print(f"✅ SKU '{canonical_sku}' berhasil ditemukan dan diupdate di Consignment Tab {target_sheet} (Baris {sheet_res.get('row', '-')})")
                 else:
                     alt_sheet = "PHOTO STUDIO" if target_sheet == "PHOTO OWNER" else "PHOTO OWNER"
                     alt_res = update_consignment_status_sheet(canonical_sku, status_text, sheet_name=alt_sheet)
@@ -4065,6 +4120,8 @@ def wa_webhook():
                         else:
                             is_consign_ps = True
                             sheet_consign_ps_res = alt_res
+                        updated_in_sheet = True
+                        print(f"✅ SKU '{canonical_sku}' berhasil ditemukan dan diupdate di Consignment Tab {alt_sheet} (Baris {alt_res.get('row', '-')})")
                     else:
                         # Jika tidak ditemukan di Consignment, cek Spreadsheet Slow Moving (ALL STOCK)
                         print(f"🔍 SKU '{sku}' tidak ditemukan di Consignment. Memeriksa Spreadsheet Slow Moving (Tab ALL STOCK)...")
@@ -4072,6 +4129,7 @@ def wa_webhook():
                         if sheet_slow_res.get("status") == "success":
                             is_featured = True
                             sheet_slow_moving_res = sheet_slow_res
+                            updated_in_sheet = True
                             print(f"✅ Ditemukan dan berhasil diupdate di Spreadsheet Slow Moving (Baris {sheet_slow_res.get('row', '-')}, Tab {sheet_slow_res.get('tab_name', '-')})")
                         else:
                             print(f"ℹ️ SKU '{sku}' juga tidak ditemukan di Slow Moving: {sheet_slow_res.get('message', '')}")
@@ -4210,21 +4268,46 @@ def wa_webhook():
 
             canonical_sku = (extract_sku_from_blogger_post(post)[0] if post else None) or clean_sku_string(sku)
 
-            # Update Spreadsheet Consignment PS (HANYA jika CONSIGNMENT_PS)
+            # Update Spreadsheet Consignment PS / PO
             sheet_consign_ps_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PS"}
+            sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
+            updated_repost = False
+
             if is_consign_ps and blogger_res.get("status") == "success":
                 print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PS. Memperbarui Google Spreadsheet Consignment (Tab PHOTO STUDIO)...")
-                sheet_consign_ps_res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO STUDIO")
-            else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PS atau Blogspot gagal.")
+                res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO STUDIO")
+                sheet_consign_ps_res = res
+                if res.get("status") == "success":
+                    updated_repost = True
 
-            # Update Spreadsheet Consignment PO (HANYA jika CONSIGNMENT_PO)
-            sheet_consign_po_res = {"status": "skipped", "message": "Bukan tag CONSIGNMENT_PO"}
-            if is_consign_po and blogger_res.get("status") == "success":
+            elif (is_consign_po or sku.upper().startswith("CPO")) and blogger_res.get("status") == "success":
                 print(f"📌 Produk '{canonical_sku}' memiliki label CONSIGNMENT_PO. Memperbarui Google Spreadsheet Consignment (Tab PHOTO OWNER)...")
-                sheet_consign_po_res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO OWNER")
-            else:
-                print(f"ℹ️ Produk '{sku}' BUKAN CONSIGNMENT_PO atau Blogspot gagal.")
+                res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO OWNER")
+                sheet_consign_po_res = res
+                if res.get("status") == "success":
+                    updated_repost = True
+
+            # Smart Fallback jika tidak ada tag spesifik di Blogspot
+            if not updated_repost and blogger_res.get("status") == "success":
+                target_sheet = "PHOTO OWNER" if sku.upper().startswith("CPO") else "PHOTO STUDIO"
+                alt_sheet = "PHOTO STUDIO" if target_sheet == "PHOTO OWNER" else "PHOTO OWNER"
+                res_primary = update_consignment_repost_sheet(canonical_sku, sheet_name=target_sheet)
+                if res_primary.get("status") == "success":
+                    if target_sheet == "PHOTO OWNER":
+                        is_consign_po = True
+                        sheet_consign_po_res = res_primary
+                    else:
+                        is_consign_ps = True
+                        sheet_consign_ps_res = res_primary
+                else:
+                    res_alt = update_consignment_repost_sheet(canonical_sku, sheet_name=alt_sheet)
+                    if res_alt.get("status") == "success":
+                        if alt_sheet == "PHOTO OWNER":
+                            is_consign_po = True
+                            sheet_consign_po_res = res_alt
+                        else:
+                            is_consign_ps = True
+                            sheet_consign_ps_res = res_alt
 
             # Inisialisasi status spreadsheet Slow Moving (Dilewati untuk REPOST)
             sheet_slow_moving_res = {"status": "skipped", "message": "Dilewati (Tidak ada perubahan spreadsheet Slow Moving untuk REPOST)"}

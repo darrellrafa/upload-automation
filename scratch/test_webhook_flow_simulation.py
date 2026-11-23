@@ -550,5 +550,52 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("ℹ️ *Tidak ada sesi identifikasi jam tangan yang aktif.*", last_wa_msg)
         self.assertIn("sold [SKU]", last_wa_msg)
 
+    @patch("flask_app.kirim_balasan_wa")
+    @patch("flask_app.update_shopify_takedown")
+    @patch("flask_app.get_blogger_service")
+    @patch("flask_app.find_blogger_post_by_code")
+    @patch("flask_app.delete_blogger_post")
+    @patch("flask_app.update_consignment_status_sheet")
+    def test_sold_takedown_without_blogspot_labels_falls_back_to_photo_studio(
+        self, mock_sheet_status, mock_del_blog, mock_find_post, mock_get_blog, mock_shop_td, mock_kirim_wa
+    ):
+        chat_id = "test-group@g.us"
+        sku = "09R8215"
+        mock_shop_td.return_value = {"status": "success", "product_title": "TUDOR PELAGOS LHD TITANIUM BLACK", "matched_sku": sku}
+        mock_get_blog.return_value = MagicMock()
+        # Postingan di Blogspot ada, TAPI TIDAK punya label CONSIGNMENT_PS atau CONSIGNMENT_PO
+        mock_find_post.return_value = {
+            "id": "post-09r",
+            "title": "[FOR SALE] TUDOR PELAGOS LHD TITANIUM BLACK (2026)",
+            "labels": ["TUDOR", "FOR SALE", "WATCHES"],
+            "published": "2026-07-23T10:00:00Z",
+            "content": "Price: Rp 85,000,000Code: 09R8215 (Victor T)"
+        }
+        mock_del_blog.return_value = {"status": "success", "post_title": "[FOR SALE] TUDOR PELAGOS LHD TITANIUM BLACK (2026)"}
+        mock_sheet_status.return_value = {"status": "success", "row": 2515, "tab_name": "PHOTO STUDIO"}
+
+        sold_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-sold-09r",
+            "senderData": {"chatId": chat_id, "senderName": "Dylan Baru"},
+            "messageData": {"typeMessage": "textMessage", "textMessageData": {"textMessage": f"sold {sku}"}}
+        }
+        flask_app.request.get_json = MagicMock(return_value=sold_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("command"), "SOLD")
+        self.assertEqual(res.get("sku"), sku)
+        # Verifikasi bahwa spreadsheet tetap diupdate via Smart Fallback ke PHOTO STUDIO
+        self.assertEqual(res["spreadsheet_consignment_ps"]["status"], "success")
+        self.assertEqual(res["spreadsheet_consignment_ps"]["row"], 2515)
+
+        # Verifikasi teks pesan WhatsApp
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("✅ *Spreadsheet (Consignment PS):*", last_wa_msg)
+        self.assertIn("Baris 2515, Tab PHOTO STUDIO", last_wa_msg)
+        self.assertNotIn("Spreadsheet:* Dilewati", last_wa_msg)
+
 if __name__ == "__main__":
     unittest.main()
