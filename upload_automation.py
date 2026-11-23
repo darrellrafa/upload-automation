@@ -78,6 +78,10 @@ WEBHOOK_SLOW_MOVING_FEATURED = os.getenv("WEBHOOK_SLOW_MOVING_FEATURED", "")
 DAFTAR_MEREK_IDWX = {
     "ROLEX": "Rolex", "PATEK PHILIPPE": "Patek Philippe",
     "AUDEMARS PIGUET X SWATCH": "Swatch X Audemars Piguet", "SWATCH X AUDEMARS PIGUET": "Swatch X Audemars Piguet",
+    "SWATCH X OMEGA": "Swatch X Omega", "OMEGA X SWATCH": "Swatch X Omega",
+    "SWATCH OMEGA": "Swatch X Omega", "OMEGA SWATCH": "Swatch X Omega",
+    "SWATCH X BLANCPAIN": "Swatch X Blancpain", "BLANCPAIN X SWATCH": "Swatch X Blancpain",
+    "SWATCH": "Swatch",
     "AUDEMARS PIGUET": "Audemars Piguet",
     "JAEGER LECOULTRE": "Jaeger-LeCoultre", "JAEGER-LECOULTRE": "Jaeger-LeCoultre", "JAEGER": "Jaeger-LeCoultre", "JLC": "Jaeger-LeCoultre",
     "FRANCK MULLER": "Franck Muller", "BELL & ROSS": "Bell & Ross",
@@ -98,7 +102,7 @@ def detect_vendor_and_brand(clean_title):
     matched_keyword = ""
     for keyword in sorted(DAFTAR_MEREK_IDWX.keys(), key=len, reverse=True):
         # Pola fleksibel untuk tanda hubung (-) vs spasi ( )
-        kw_pattern = re.escape(keyword).replace(r"\ ", r"[- ]").replace(r"\-", r"[- ]")
+        kw_pattern = re.escape(keyword).replace(r"\ ", r"[- ]+").replace(r"\-", r"[- ]+")
         if re.search(rf"\b{kw_pattern}\b", clean_title, re.IGNORECASE):
             vendor = DAFTAR_MEREK_IDWX[keyword]
             matched_keyword = keyword

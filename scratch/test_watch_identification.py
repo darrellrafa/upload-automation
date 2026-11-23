@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Mock external modules if not installed locally
-for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth2.credentials", "googleapiclient", "googleapiclient.discovery"]:
+for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth2.credentials", "googleapiclient", "googleapiclient.discovery", "googleapiclient.http"]:
     if mod not in sys.modules:
         m = MagicMock()
         if mod == "flask":
@@ -13,12 +13,19 @@ for mod in ["flask", "requests", "bs4", "google", "google.oauth2", "google.oauth
             m.Flask = MagicMock(return_value=app_inst)
             m.request = MagicMock()
             m.jsonify = lambda x: x
+        elif mod == "requests":
+            res_m = MagicMock()
+            res_m.status_code = 200
+            res_m.json.return_value = {"access_token": "fake", "expires_in": 3600, "locations": []}
+            m.post.return_value = res_m
+            m.get.return_value = res_m
         sys.modules[mod] = m
 
 # Ensure current dir in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import flask_app
+import upload_automation
 from flask_app import (
     parse_reprice_chat,
     parse_takedown_chat,
@@ -27,6 +34,7 @@ from flask_app import (
     extract_sku_from_quoted_message,
     format_watch_identification_message,
     normalize_watch_model_title,
+    detect_watch_brand,
     is_known_action_command,
     ACTIVE_IDENTIFIED_WATCHES
 )
@@ -354,6 +362,47 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         a2 = "AIR KING (2023)"
         self.assertEqual(normalize_watch_model_title(a1), normalize_watch_model_title(a2))
         self.assertEqual(normalize_watch_model_title(a1), "AIR KING")
+
+    def test_swatch_x_omega_brand_and_title_detection(self):
+        # 1. Swatch X Omega Moonswatch
+        t1 = "SWATCH X OMEGA MOONSWATCH MISSION TO THE SUN"
+        v1, kw1 = upload_automation.detect_vendor_and_brand(t1)
+        self.assertEqual(v1, "Swatch X Omega")
+        self.assertEqual(kw1, "SWATCH X OMEGA")
+        s1 = upload_automation.strip_brand_from_title(t1, vendor=v1, matched_keyword=kw1)
+        self.assertEqual(s1, "MOONSWATCH MISSION TO THE SUN")
+
+        # 2. Swatch X Omega Snoopy White
+        t2 = "SWATCH X OMEGA MOONSWATCH MISSION TO THE MOONPHASE 'SNOOPY' WHITE"
+        v2, kw2 = upload_automation.detect_vendor_and_brand(t2)
+        self.assertEqual(v2, "Swatch X Omega")
+        s2 = upload_automation.strip_brand_from_title(t2, vendor=v2, matched_keyword=kw2)
+        self.assertEqual(s2, "MOONSWATCH MISSION TO THE MOONPHASE 'SNOOPY' WHITE")
+
+        # 3. Omega X Swatch variasi terbalik
+        t3 = "OMEGA X SWATCH MOONSWATCH MISSION TO MARS"
+        v3, kw3 = upload_automation.detect_vendor_and_brand(t3)
+        self.assertEqual(v3, "Swatch X Omega")
+
+        # 4. Omega murni tetap Omega (tidak tertukar dengan Swatch X Omega)
+        t4 = "OMEGA SPEEDMASTER PROFESSIONAL MOONWATCH 321"
+        v4, kw4 = upload_automation.detect_vendor_and_brand(t4)
+        self.assertEqual(v4, "Omega")
+        self.assertEqual(kw4, "OMEGA")
+        s4 = upload_automation.strip_brand_from_title(t4, vendor=v4, matched_keyword=kw4)
+        self.assertEqual(s4, "SPEEDMASTER PROFESSIONAL MOONWATCH 321")
+
+        # 5. Swatch X Blancpain
+        t5 = "SWATCH X BLANCPAIN SCUBA FIFTY FATHOMS ARCTIC OCEAN"
+        v5, kw5 = upload_automation.detect_vendor_and_brand(t5)
+        self.assertEqual(v5, "Swatch X Blancpain")
+
+    def test_flask_app_detect_watch_brand_swatch_x_omega(self):
+        b1 = detect_watch_brand("SWATCH X OMEGA MOONSWATCH MISSION TO THE SUN (2021)")
+        self.assertEqual(b1, "SWATCH X OMEGA")
+
+        b2 = detect_watch_brand("OMEGA SPEEDMASTER 321 'ED WHITE' (2022)")
+        self.assertEqual(b2, "OMEGA")
 
     def test_is_known_action_command(self):
         # Bukan action command (harus masuk ke identifikasi foto jam)
