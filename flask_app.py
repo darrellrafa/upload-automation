@@ -1577,17 +1577,43 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post
                 "caption": caption_wa
             }
             res = requests.post(url_file, json=payload_file, timeout=20)
+            id_message = None
             if res.status_code == 200:
-                print(f"📷 Berhasil mengirim feedback WA beserta foto jam tangan ke {chat_id} (URL: {final_image_url})")
-                sent_image = True
-                # Jika ada teks panjang yang terpotong karena batas caption 1024 karakter, kirim sambungannya
-                if len(pesan_text) > 1024:
-                    sisa_pesan = "..." + pesan_text[1020:]
-                    url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
-                    requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+                try:
+                    id_message = res.json().get("idMessage")
+                except Exception:
+                    id_message = None
+                print(f"📷 Green API menerima sendFileByUrl (idMessage: {id_message}, URL: {final_image_url})")
+
+                # Verifikasi status pengiriman jika ada idMessage
+                is_failed = False
+                if id_message:
+                    time.sleep(1.5)
+                    try:
+                        url_msg = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/getMessage/{GREEN_API_API_TOKEN}"
+                        check_res = requests.post(url_msg, json={"chatId": chat_id, "idMessage": id_message}, timeout=5)
+                        if check_res.status_code == 200:
+                            msg_info = check_res.json()
+                            status_msg = msg_info.get("statusMessage")
+                            if status_msg == "failed":
+                                is_failed = True
+                                print(f"⚠️ Green API sendFileByUrl gagal terkirim (statusMessage: failed, idMessage: {id_message})")
+                    except Exception as e_ch:
+                        print(f"ℹ️ Verifikasi Green API getMessage: {e_ch}")
+
+                if not is_failed:
+                    sent_image = True
+                    print(f"📷 Berhasil mengirim feedback WA beserta foto jam tangan ke {chat_id}")
+                    # Jika ada teks panjang yang terpotong karena batas caption 1024 karakter, kirim sambungannya
+                    if len(pesan_text) > 1024:
+                        sisa_pesan = "..." + pesan_text[1020:]
+                        url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
+                        requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
             else:
                 print(f"⚠️ Green API sendFileByUrl gagal (Status {res.status_code}): {res.text}.")
-                # Coba cadangan foto dari Shopify jika sebelumnya mengirim foto Blogspot
+
+            # Coba cadangan foto dari Shopify jika percobaan pertama gagal
+            if not sent_image:
                 shopify_backup = None
                 if sku:
                     shopify_backup = get_shopify_image_by_sku(sku, blogger_post=blogger_post)
