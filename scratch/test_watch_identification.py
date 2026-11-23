@@ -192,18 +192,43 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             "status": "success",
             "tab_name": "PHOTO STUDIO",
             "row": 2819,
-            "form": "Nama : Said\nNo Hp : 08118811159\nBrand/Ref No: Omega ed white 321"
+            "form": "Nama : Said\nNo Hp : 08118811159\nBrand/Ref No: Omega ed white 321",
+            "owner": "Said",
+            "sales": "Tommy"
         }
 
         with patch("requests.post", return_value=mock_res):
-            sheet_info, form, owner = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]}, return_form=True)
+            sheet_info, form, owner, sales = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]}, return_form=True)
             self.assertEqual(sheet_info, "PHOTO STUDIO (Baris 2819)")
             self.assertIn("Nama : Said", form)
-            self.assertEqual(owner, "")
+            self.assertEqual(owner, "Said")
+            self.assertEqual(sales, "Tommy")
 
             # Test backwards compatibility when return_form=False
             sheet_info_only = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]})
             self.assertEqual(sheet_info_only, "PHOTO STUDIO (Baris 2819)")
+
+    def test_identification_message_with_owner_and_sales_for_photo_studio(self):
+        form_sample = (
+            "Nama : Said\n"
+            "No Hp : 08118811159\n"
+            "Brand/Ref No: Omega ed white 321\n"
+            "Order received by : yusup"
+        )
+        msg = format_watch_identification_message(
+            title="SPEEDMASTER MOONWATCH 321 'ED WHITE' (2022)",
+            sku="88702793",
+            formatted_price="Rp 235,000,000",
+            sheet_info="PHOTO STUDIO (Baris 2819)",
+            location="Ready di Toko",
+            form_content=form_sample,
+            owner="Said",
+            sales="Tommy"
+        )
+        self.assertIn("📊 *Spreadsheet:* PHOTO STUDIO (Baris 2819)\n*Owner:* Said\n*Sales:* Tommy\n", msg)
+        self.assertIn("Nama : Said", msg)
+        self.assertIn("Order received by : yusup", msg)
+        self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
 
     def test_identification_message_with_owner_for_slow_moving(self):
         msg = format_watch_identification_message(
@@ -215,6 +240,7 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             owner="ES"
         )
         self.assertIn("📊 *Spreadsheet:* ALL STOCK (Baris 284)\n*Owner:* ES\n", msg)
+        self.assertNotIn("*Sales:*", msg)
         self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
         self.assertNotIn("Nama :", msg)
 
@@ -232,10 +258,11 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         }
 
         with patch("requests.post", return_value=mock_res):
-            sheet_info, form, owner = resolve_watch_spreadsheet_location("GW036128", blogger_post=None, return_form=True)
+            sheet_info, form, owner, sales = resolve_watch_spreadsheet_location("GW036128", blogger_post=None, return_form=True)
             self.assertEqual(sheet_info, "ALL STOCK (Baris 284)")
             self.assertEqual(form, "")
             self.assertEqual(owner, "ES")
+            self.assertEqual(sales, "")
 
     def test_find_active_watch_cpo_preference_for_photo_owner(self):
         from unittest.mock import patch

@@ -46,6 +46,8 @@ function doPost(e) {
       var foundStatusQ = "";
       var foundTabName = "";
       var foundFormQ = "";
+      var foundOwnerQ = "";
+      var foundSalesQ = "";
 
       for (var s = 0; s < candidateSheets.length; s++) {
         var targetSheetName = candidateSheets[s];
@@ -62,6 +64,11 @@ function doPost(e) {
             foundTabName = targetSheetName;
             // Kolom D (index 3) adalah isi format form konsinyasi
             foundFormQ = (valsQ[i].length > 3 ? (valsQ[i][3] || "") : "").toString().trim();
+            // Kolom E (index 4) adalah OWNER, Kolom F (index 5) adalah SALES (khusus tab PHOTO STUDIO)
+            if (targetSheetName === "PHOTO STUDIO") {
+              foundOwnerQ = (valsQ[i].length > 4 ? (valsQ[i][4] || "") : "").toString().trim();
+              foundSalesQ = (valsQ[i].length > 5 ? (valsQ[i][5] || "") : "").toString().trim();
+            }
             break;
           }
         }
@@ -74,7 +81,9 @@ function doPost(e) {
           "tab_name": foundTabName,
           "row": foundRowQ,
           "current_status": foundStatusQ,
-          "form": foundFormQ
+          "form": foundFormQ,
+          "owner": foundOwnerQ,
+          "sales": foundSalesQ
         })).setMimeType(ContentService.MimeType.JSON);
       } else {
         return ContentService.createTextOutput(JSON.stringify({

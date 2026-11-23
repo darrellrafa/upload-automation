@@ -494,12 +494,13 @@ def is_identification_request(text):
         return False
     return bool(re.search(r'\b(identifikasi|identify)\b', text.strip(), re.IGNORECASE))
 
-def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None, form_content="", owner=None):
+def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None, form_content="", owner=None, sales=None):
     """
     Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'batal').
     Mendukung status lokasi dinamis (misal: 'Ready di Toko' atau 'Ready in Bali').
-    Menyertakan baris '*Owner:* [owner]' jika dari tab ALL STOCK,
-    atau isi formulir konsinyasi (Kolom D) jika dari tab PHOTO STUDIO / PHOTO OWNER.
+    Menyertakan baris '*Owner:* [owner]' jika ada (tab ALL STOCK atau PHOTO STUDIO),
+    serta baris '*Sales:* [sales]' jika ada (khusus tab PHOTO STUDIO),
+    dan isi formulir konsinyasi (Kolom D) jika dari tab PHOTO STUDIO / PHOTO OWNER.
     """
     status_str = f"AKTIF ({location})" if location else "AKTIF (Ready di Toko)"
     msg = (
@@ -513,6 +514,8 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info,
     )
     if owner and str(owner).strip():
         msg += f"*Owner:* {str(owner).strip()}\n"
+    if sales and str(sales).strip():
+        msg += f"*Sales:* {str(sales).strip()}\n"
 
     if form_content and form_content.strip():
         msg += f"\n{form_content.strip()}\n"
@@ -1080,9 +1083,9 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
 def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False):
     """
     Menentukan lokasi spreadsheet (Nama Tab & Nomor Baris), isi formulir konsinyasi (Kolom D),
-    dan Owner (Kolom E tab ALL STOCK) untuk jam tangan yang diidentifikasi.
+    Owner (Kolom E tab PHOTO STUDIO atau tab ALL STOCK), dan Sales (Kolom F tab PHOTO STUDIO) untuk jam tangan yang diidentifikasi.
     Format yang dihasilkan: "ALL STOCK (Baris 313)" atau "PHOTO STUDIO (Baris 142)"
-    Jika return_form=True, mengembalikan tuple (sheet_info, form_content, owner).
+    Jika return_form=True, mengembalikan tuple (sheet_info, form_content, owner, sales).
     """
     is_consign_ps = False
     is_consign_po = False
@@ -1098,6 +1101,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
     sheet_info = "ALL STOCK"
     form_content = ""
     owner = ""
+    sales = ""
 
     # 1. Jika terindikasi Consignment PO atau berawalan CPO
     if is_consign_po or sku.upper().startswith("CPO"):
@@ -1108,11 +1112,11 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
                 if data.get("status") == "success" and data.get("row"):
                     sheet_info = f"{data.get('tab_name', 'PHOTO OWNER')} (Baris {data.get('row')})"
                     form_content = (data.get("form") or "").strip()
-                    return (sheet_info, form_content, owner) if return_form else sheet_info
+                    return (sheet_info, form_content, "", "") if return_form else sheet_info
         except Exception as e:
             print(f"⚠️ Error query consignment PO sheet: {e}")
         sheet_info = "PHOTO OWNER"
-        return (sheet_info, form_content, owner) if return_form else sheet_info
+        return (sheet_info, form_content, "", "") if return_form else sheet_info
 
     # 2. Jika terindikasi Consignment PS
     if is_consign_ps:
@@ -1123,11 +1127,21 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
                 if data.get("status") == "success" and data.get("row"):
                     sheet_info = f"{data.get('tab_name', 'PHOTO STUDIO')} (Baris {data.get('row')})"
                     form_content = (data.get("form") or "").strip()
-                    return (sheet_info, form_content, owner) if return_form else sheet_info
+                    owner = (data.get("owner") or "").strip()
+                    sales = (data.get("sales") or "").strip()
+                    if not owner and form_content:
+                        m_owner = re.search(r'(?:^|\n)\s*Nama\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
+                        if m_owner:
+                            owner = m_owner.group(1).strip()
+                    if not sales and form_content:
+                        m_sales = re.search(r'(?:^|\n)\s*Order\s+received\s+by\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
+                        if m_sales:
+                            sales = m_sales.group(1).strip()
+                    return (sheet_info, form_content, owner, sales) if return_form else sheet_info
         except Exception as e:
             print(f"⚠️ Error query consignment PS sheet: {e}")
         sheet_info = "PHOTO STUDIO"
-        return (sheet_info, form_content, owner) if return_form else sheet_info
+        return (sheet_info, form_content, owner, sales) if return_form else sheet_info
 
     # 3. Default atau FEATURED: Cek Spreadsheet Slow Moving (Tab ALL STOCK)
     try:
@@ -1137,7 +1151,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
             if data.get("status") == "success" and data.get("row"):
                 sheet_info = f"{data.get('tab_name', 'ALL STOCK')} (Baris {data.get('row')})"
                 owner = (data.get("owner") or "").strip()
-                return (sheet_info, form_content, owner) if return_form else sheet_info
+                return (sheet_info, form_content, owner, "") if return_form else sheet_info
     except Exception as e:
         print(f"⚠️ Error query slow moving sheet: {e}")
 
@@ -1149,7 +1163,17 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
             if data_alt.get("status") == "success" and data_alt.get("row"):
                 sheet_info = f"{data_alt.get('tab_name', 'PHOTO STUDIO')} (Baris {data_alt.get('row')})"
                 form_content = (data_alt.get("form") or "").strip()
-                return (sheet_info, form_content, owner) if return_form else sheet_info
+                owner = (data_alt.get("owner") or "").strip()
+                sales = (data_alt.get("sales") or "").strip()
+                if not owner and form_content:
+                    m_owner = re.search(r'(?:^|\n)\s*Nama\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
+                    if m_owner:
+                        owner = m_owner.group(1).strip()
+                if not sales and form_content:
+                    m_sales = re.search(r'(?:^|\n)\s*Order\s+received\s+by\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
+                    if m_sales:
+                        sales = m_sales.group(1).strip()
+                return (sheet_info, form_content, owner, sales) if return_form else sheet_info
     except Exception:
         pass
 
@@ -1161,11 +1185,11 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
             if data_alt_po.get("status") == "success" and data_alt_po.get("row"):
                 sheet_info = f"{data_alt_po.get('tab_name', 'PHOTO OWNER')} (Baris {data_alt_po.get('row')})"
                 form_content = (data_alt_po.get("form") or "").strip()
-                return (sheet_info, form_content, owner) if return_form else sheet_info
+                return (sheet_info, form_content, "", "") if return_form else sheet_info
     except Exception:
         pass
 
-    return (sheet_info, form_content, owner) if return_form else sheet_info
+    return (sheet_info, form_content, owner, sales) if return_form else sheet_info
 
 def parse_repost_chat(message_text):
     """
@@ -3416,22 +3440,28 @@ def wa_webhook():
             service = get_blogger_service()
             post = find_blogger_post_by_code(service, matched_sku) if service else None
 
-            # Tentukan lokasi spreadsheet (Tab & Nomor Baris), form konsinyasi, dan owner jika ada
+            # Tentukan lokasi spreadsheet (Tab & Nomor Baris), form konsinyasi, dan owner/sales jika ada
             sheet_res = resolve_watch_spreadsheet_location(matched_sku, blogger_post=post, return_form=True)
             if isinstance(sheet_res, (tuple, list)):
-                if len(sheet_res) >= 3:
+                if len(sheet_res) >= 4:
+                    sheet_info, form_content, owner, sales = sheet_res[0], sheet_res[1], sheet_res[2], sheet_res[3]
+                elif len(sheet_res) == 3:
                     sheet_info, form_content, owner = sheet_res[0], sheet_res[1], sheet_res[2]
+                    sales = ""
                 elif len(sheet_res) == 2:
                     sheet_info, form_content = sheet_res[0], sheet_res[1]
                     owner = ""
+                    sales = ""
                 else:
                     sheet_info = sheet_res[0]
                     form_content = ""
                     owner = ""
+                    sales = ""
             else:
                 sheet_info = str(sheet_res)
                 form_content = ""
                 owner = ""
+                sales = ""
 
             # Simpan ke sesi jam tangan aktif per chat_id
             ACTIVE_IDENTIFIED_WATCHES[chat_id] = {
@@ -3442,13 +3472,14 @@ def wa_webhook():
                 "sheet_info": sheet_info,
                 "form_content": form_content,
                 "owner": owner,
+                "sales": sales,
                 "location": matched_location,
                 "timestamp": time.time()
             }
             if len(ACTIVE_IDENTIFIED_WATCHES) > MAX_ACTIVE_WATCHES:
                 ACTIVE_IDENTIFIED_WATCHES.popitem(last=False)
 
-            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk status lokasi dinamis, form konsinyasi, atau owner)
+            # Kirim pesan identifikasi lengkap dengan opsi Aksi Cepat (termasuk status lokasi dinamis, form konsinyasi, atau owner/sales)
             pesan_id = format_watch_identification_message(
                 matched_title,
                 matched_sku,
@@ -3456,7 +3487,8 @@ def wa_webhook():
                 sheet_info,
                 location=matched_location,
                 form_content=form_content,
-                owner=owner
+                owner=owner,
+                sales=sales
             )
             kirim_balasan_wa(chat_id, pesan_id)
 
@@ -3467,7 +3499,8 @@ def wa_webhook():
                 "shopify": shopify_match,
                 "sheet_info": sheet_info,
                 "form_content": form_content,
-                "owner": owner
+                "owner": owner,
+                "sales": sales
             }), 200
 
         if not caption:
