@@ -141,13 +141,14 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("📌 *Merek & Seri:* Vacheron Constantin Historiques American 1921", msg)
         self.assertIn("🔢 *Kode / SKU:* 3012154", msg)
         self.assertIn("💰 *Harga Saat Ini:* Rp 678,000,000", msg)
-        self.assertIn("📦 *Status:* AKTIF (Ready di Toko)", msg)
+        self.assertIn("📦 *Status:* AKTIF (ada di shopify)", msg)
         self.assertIn("📊 *Spreadsheet:* ALL STOCK (Baris 313)", msg)
         self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
         self.assertIn("• Ketik *sold* untuk menandai laku", msg)
         self.assertIn("• Ketik *on hold* untuk simpan/hold", msg)
         self.assertIn("• Ketik *reprice [harga]* untuk ubah harga", msg)
         self.assertIn("• Ketik *batal* jika tidak ada tindakan", msg)
+        self.assertIn("Note: [harga] di-isi dengan, contoh: 20jt atau bisa juga 20,000,000.", msg)
 
     def test_identification_message_with_form_content(self):
         form_sample = (
@@ -459,7 +460,7 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             formatted_price="Rp 280,000,000",
             sheet_info="PHOTO STUDIO (Baris 2760)"
         )
-        self.assertIn("📦 *Status:* AKTIF (Ready di Toko)", msg_default)
+        self.assertIn("📦 *Status:* AKTIF (ada di shopify)", msg_default)
 
         # Dengan lokasi Bali
         msg_bali = format_watch_identification_message(

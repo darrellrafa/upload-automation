@@ -497,12 +497,16 @@ def is_identification_request(text):
 def format_watch_identification_message(title, sku, formatted_price, sheet_info, location=None, form_content="", owner=None, sales=None):
     """
     Memformat pesan identifikasi jam tangan IDWX dengan opsi Aksi Cepat (termasuk opsi 'batal').
-    Mendukung status lokasi dinamis (misal: 'Ready di Toko' atau 'Ready in Bali').
+    Mendukung status lokasi dinamis (misal: 'ada di shopify' atau 'Ready in Bali').
     Menyertakan baris '*Owner:* [owner]' jika ada (tab ALL STOCK atau PHOTO STUDIO),
     serta baris '*Sales:* [sales]' jika ada (khusus tab PHOTO STUDIO),
     dan isi formulir konsinyasi (Kolom D) jika dari tab PHOTO STUDIO / PHOTO OWNER.
     """
-    status_str = f"AKTIF ({location})" if location else "AKTIF (Ready di Toko)"
+    if location and location not in ["Ready di Toko", "ada di shopify"]:
+        status_str = f"AKTIF ({location})"
+    else:
+        status_str = "AKTIF (ada di shopify)"
+
     msg = (
         f"⌚ *IDENTIFIKASI JAM TANGAN IDWX*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -525,7 +529,8 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info,
         f"• Ketik *sold* untuk menandai laku\n"
         f"• Ketik *on hold* untuk simpan/hold\n"
         f"• Ketik *reprice [harga]* untuk ubah harga\n"
-        f"• Ketik *batal* jika tidak ada tindakan"
+        f"• Ketik *batal* jika tidak ada tindakan\n"
+        f"Note: [harga] di-isi dengan, contoh: 20jt atau bisa juga 20,000,000."
     )
     return msg
 
@@ -889,7 +894,7 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
 
                     # Cek apakah produk memiliki label / tag Ready in Bali
                     is_candidate_bali = any("bali" in t.lower() for t in tags_list) or "bali" in title_upper.lower()
-                    product_location = "Ready in Bali" if is_candidate_bali else "Ready di Toko"
+                    product_location = "Ready in Bali" if is_candidate_bali else "ada di shopify"
 
                     score = 0
                     if status_upper == "ACTIVE":
@@ -1077,7 +1082,7 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
         "title": best["title"],
         "numeric_price": best["price"],
         "formatted_price": format_rupiah(best["price"]),
-        "location": best.get("location", "Ready di Toko")
+        "location": best.get("location", "ada di shopify")
     }
 
 def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False):
@@ -3434,7 +3439,7 @@ def wa_webhook():
             matched_title = shopify_match["title"]
             formatted_price = shopify_match["formatted_price"]
             numeric_price = shopify_match["numeric_price"]
-            matched_location = shopify_match.get("location", "Ready di Toko")
+            matched_location = shopify_match.get("location", "ada di shopify")
 
             # Cek Blogspot jika ada untuk label
             service = get_blogger_service()

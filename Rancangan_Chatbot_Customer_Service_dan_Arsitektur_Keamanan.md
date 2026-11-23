@@ -334,3 +334,4 @@ Meta Graph API menyediakan fitur **Generic Template (Carousel Card)** yang sanga
 Dengan memisahkan layanan customer service ke dalam **`cs_app.py`**, sistem mendapatkan dua keuntungan fundamental:
 1. **Keamanan Total**: Tidak ada keterhubungan dengan database Google Sheets (meniadakan risiko kebocoran data owner, sales, form, dan modal).
 2. **Stabilitas Operasional**: Jalur chat calon pembeli di Instagram DM tidak akan pernah membebani atau mengganggu antrean webhook operasional WhatsApp internal pada `flask_app.py`.
+
