@@ -22,10 +22,16 @@ flowchart TD
         GS[("Google Sheets<br/>(Consignment & Slow Moving)")]
     end
 
-    subgraph Controller ["3. Live Webhook Controller"]
+    subgraph Controller ["3. Live Webhook Controller (Admin Internal)"]
         WA["WhatsApp Group / Staff<br/>(Green-API)"]
         FA["flask_app.py<br/>(PythonAnywhere Server)"]
         GV["Gemini Multimodal AI<br/>(Visual Watch ID)"]
+    end
+
+    subgraph CS_Service ["4. Customer Service AI Concierge (Kanal Publik)"]
+        IG["Instagram DM (Meta Graph API)<br/>& WhatsApp CS Publik"]
+        CS["cs_app.py<br/>(Dedicated CS Flask Server)"]
+        GC["Gemini 2.0 Flash<br/>(Luxury Concierge AI)"]
     end
 
     BP -->|"Scan Post 5 Menit"| UA
@@ -40,12 +46,19 @@ flowchart TD
     FA <-->|"Update Teks Harga, Coret, & Last Post"| BP
     FA <-->|"Update Status, Notes, Form, Owner, Sales"| GS
     FA <-->|"Analisis Foto Jam & Verifikasi Visual"| GV
+
+    IG <-->|"Chat Tanya Jam, Budget, Rekomendasi"| CS
+    CS <-->|"Query HANYA Produk ACTIVE & Stok > 0"| SP
+    CS <-->|"Generate Respon Ramah & Berkelas"| GC
+    CS -.->|"ISOLASI TOTAL (Zero-Access: Tidak Terhubung)"| GS
 ```
 
 1. **`upload_automation.py` (Ingestion & Upload Engine)**:  
    Memonitor postingan baru di Blogger secara otomatis setiap 5 menit, mengklasifikasikan jenis produk (`NOTSYNC`, `TWP`, `PHOTO STUDIO`, `PHOTO OWNER`), mengekstrak data katalog (judul, SKU, harga, tahun, foto resolusi tinggi), mengunggahnya ke Shopify, mengunggah video ke YouTube Shorts, serta melakukan sinkronisasi balik (*reverse-sync*) penulisan `SKU Shopify: [SKU]` pada artikel Blogspot jika SKU bertanda strip (`-1`, `-2`).
-2. **`flask_app.py` (WhatsApp Bot Controller & Webhook Server)**:  
-   Berjalan sebagai layanan web real-time (dihosting di PythonAnywhere) yang menerima webhook WhatsApp via Green-API untuk perintah operasional (`REPRICE`, `HARGA BARU`, `SOLD`, `ON HOLD`, `TAKEDOWN`, `REPOST`, `FOTO`, dan `IDENTIFIKASI` jam tangan visual via Gemini AI), mencari produk dengan sistem pemeringkatan cerdas (*Multi-Candidate Ranking*), dan melakukan pembaruan serentak ke Shopify, Blogspot, dan Google Sheets.
+2. **`flask_app.py` (WhatsApp Bot Controller & Webhook Server - Operasional Internal)**:  
+   Berjalan sebagai layanan web real-time (dihosting di PythonAnywhere) yang menerima webhook WhatsApp via Green-API untuk perintah staf toko (`REPRICE`, `HARGA BARU`, `SOLD`, `ON HOLD`, `TAKEDOWN`, `REPOST`, `FOTO`, dan `IDENTIFIKASI` jam tangan visual via Gemini AI), mencari produk dengan sistem pemeringkatan cerdas (*Multi-Candidate Ranking*), dan melakukan pembaruan serentak ke Shopify, Blogspot, dan Google Sheets.
+3. **`cs_app.py` (Customer Service AI Concierge Server - Instagram DM & WhatsApp CS)**:  
+   Aplikasi Flask mandiri terpisah khusus untuk melayani calon pembeli 24/7 di Instagram Direct Message dan WhatsApp CS publik. Dilengkapi arsitektur keamanan nol kebocoran data (*Zero-Leakage Privacy*) yang memblokir total akses ke Google Sheets dan memotong SKU/tags internal sebelum dianalisis oleh Gemini AI. Menampilkan kartu geser interaktif (*Carousel Cards*) beresolusi tinggi dengan tombol CTA ke website dan kontak sales.
 
 ---
 
@@ -165,6 +178,76 @@ $$\text{Total Skor} = S_{\text{status}} + S_{\text{stok}} + S_{\text{base}} + S_
 
 ---
 
+### 3.3. Customer Service AI Concierge Server (`cs_app.py`)
+
+Aplikasi Flask terpisah khusus untuk melayani calon pembeli jam tangan mewah 24/7 di **Instagram Direct Message (DM)** dan **WhatsApp CS Publik**.
+
+> [!NOTE]
+> Dokumentasi perencanaan arsitektur, kalkulasi biaya token, dan blueprint keamanan lengkap dapat dibaca pada:  
+> 📄 **[Rancangan_Chatbot_Customer_Service_dan_Arsitektur_Keamanan.md](Rancangan_Chatbot_Customer_Service_dan_Arsitektur_Keamanan.md)**
+
+#### A. Alur Kerja Chatbot Customer Service
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Customer as Calon Pembeli (IG DM / WA)
+    participant Webhook as cs_app.py (/instagram-webhook)
+    participant Gemini as Gemini 2.0 Flash
+    participant Shopify as Shopify GraphQL API (Catalog)
+    actor Sales as Tim Sales Specialist IDWX
+
+    Customer->>Webhook: "Min, ada Rolex budget 150jt - 200jt yang ready?"
+    
+    Note over Webhook,Gemini: 1. Ekstraksi Niat & Parameter (parse_cs_inquiry_with_gemini)
+    Webhook->>Gemini: Parse Parameter -> Brand: "Rolex", Min: 150jt, Max: 200jt
+    Gemini-->>Webhook: Filter JSON (vendor: "Rolex", min_price: 150jt, max_price: 200jt)
+    
+    Note over Webhook,Shopify: 2. Query Real-Time Shopify (Hanya Status ACTIVE & Stok > 0)
+    Webhook->>Shopify: Query products(status: ACTIVE, vendor: "Rolex")
+    Shopify-->>Webhook: List Produk Raw
+    
+    Note over Webhook: 3. Sanitasi Ketat (DTO Stripper: Buang SKU & Tags)
+    Webhook->>Webhook: sanitize_watch_for_customer()
+    
+    Note over Webhook,Gemini: 4. Rangkai Rekomendasi Elegan (generate_cs_response_with_gemini)
+    Webhook->>Gemini: Persona Concierge + Produk Bersih (Title, Price, Web URL, Image)
+    Gemini-->>Webhook: Jawaban Ramah, Elegan, & Persuasif
+    
+    Note over Webhook: 5. Saringan Redaction Regex (Lapis 4)
+    Webhook->>Webhook: redact_sensitive_output()
+    
+    alt Jika Instagram DM
+        Webhook->>Customer: Kirim Teks Ramah + Carousel Cards (Foto, Judul, Harga, Tombol Web & WA)
+    else Jika WhatsApp CS
+        Webhook->>Customer: Kirim Teks Terformat Elegan + Foto Jam Utama
+    end
+    
+    opt Jika Customer Tertarik Transaksi / Nego / COD
+        Customer->>Webhook: Klik tombol "Chat Specialist"
+        Webhook->>Customer: Membuka link WhatsApp Sales Toko
+        Customer->>Sales: Lanjut negosiasi pembayaran & pengiriman
+    end
+```
+
+#### B. Arsitektur Keamanan Nol Kebocoran (*Zero-Leakage Privacy*)
+Untuk mencegah kebocoran data internal toko (identitas pemilik konsinyasi, nama sales, nomor form titip, dan SKU internal brankas), `cs_app.py` menerapkan **4 Lapis Pertahanan Teknis (*Defense-in-Depth*)**:
+
+1. **Lapis 1 (Isolasi File & Database Total)**:  
+   `cs_app.py` terpisah dari `flask_app.py` dan sama sekali **tidak memiliki koneksi/kredensial ke Google Sheets**. Data sensitif pemilik barang secara fisik tidak pernah dimuat ke memori proses server CS.
+2. **Lapis 2 (Data Whitelisting / DTO Stripper)**:  
+   Fungsi `sanitize_watch_for_customer()` **membuang 100% atribut internal**: field `sku`, `tags` konsinyasi (`TitipIDWX`, `__label2:Consignment`), dan ID varian dihapus. Gemini hanya menerima data publik: Judul, Harga Jual, URL Website Resmi, dan Foto.
+3. **Lapis 3 (Guardrail Prompt & Persona Luxury Concierge)**:  
+   Instruksi sistem melarang keras membahas kode gudang atau pemilik pribadi, dan secara elegan mengarahkan negosiasi harga atau jadwal kunjungan showroom ke nomor WhatsApp Sales Specialist.
+4. **Lapis 4 (Outbound Regex Redaction Filter)**:  
+   Fungsi `redact_sensitive_output()` memindai ulang seluruh teks keluar dengan regex sebelum dikirim ke pengguna publik untuk memastikan tidak ada informasi internal yang lolos.
+
+#### C. Estimasi Biaya Token Gemini AI
+- **100 – 250 Customer / Hari**: **Rp 0 / bulan (100% GRATIS)** menggunakan batas kuota gratis Google AI Studio (1.500 Request Per Day).
+- **1.000 Customer / Hari**: **~ Rp 288.000 / bulan** (~$18 USD) pada tarif pay-as-you-go Gemini 2.0 Flash.
+
+---
+
 ## 4. Ringkasan Sinkronisasi Antar-Platform
 
 | Kejadian / Event | Aksi di Blogspot | Aksi di Shopify | Aksi di Google Sheets | Aksi di WhatsApp |
@@ -184,7 +267,9 @@ $$\text{Total Skor} = S_{\text{status}} + S_{\text{stok}} + S_{\text{base}} + S_
 ```text
 upload-automation/
 ├── upload_automation.py               # Ingestion & Upload Engine (Blogger -> Shopify -> YouTube)
-├── flask_app.py                       # WhatsApp Webhook Server & Controller (PythonAnywhere)
+├── flask_app.py                       # WhatsApp Webhook Server & Controller - Operasional Internal (PythonAnywhere)
+├── cs_app.py                          # Customer Service AI Concierge Server - IG DM & WhatsApp CS
+├── Rancangan_Chatbot_Customer_Service_dan_Arsitektur_Keamanan.md # Dokumen perencanaan & arsitektur keamanan CS
 ├── requirements.txt                   # Daftar dependency Python
 ├── .env.example                       # Template konfigurasi environment variables
 ├── processed_urls.json                # Cache database tautan Blogger yang sudah diproses
@@ -193,6 +278,7 @@ upload-automation/
 ├── scratch/                           # Script testing, simulasi, dan file Google Apps Script (.gs)
 │   ├── Code.gs                        # Webhook Apps Script untuk Tab PHOTO STUDIO & PHOTO OWNER
 │   ├── WEBHOOK_SLOW_MOVING_FEATURED.gs# Webhook Apps Script untuk Tab ALL STOCK
+│   ├── test_cs_chatbot.py             # Unit test suite keamanan & alur Customer Service Bot
 │   ├── test_watch_identification.py   # Unit test suite untuk fitur identifikasi jam visual
 │   ├── test_webhook_flow_simulation.py# Simulasi lengkap alur webhook pesan masuk
 │   └── test_blogger_price_format.py   # Unit test regex harga & coret Blogger
@@ -208,6 +294,7 @@ upload-automation/
 - **AI & Computer Vision**: Google Gemini API (`gemini-2.0-flash`, `gemini-1.5-flash`)
 - **API & Layanan Cloud**:
   - Shopify Admin API (GraphQL & REST)
+  - Meta Graph API (Instagram Direct Message & Messenger API)
   - Google Blogger API v3
   - Google Drive API v3
   - YouTube Data API v3
