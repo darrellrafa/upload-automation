@@ -737,7 +737,10 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info,
     dan isi formulir konsinyasi (Kolom D) jika dari tab PHOTO STUDIO / PHOTO OWNER.
     """
     if location and location not in ["Ready di Toko", "ada di shopify"]:
-        status_str = f"AKTIF ({location})"
+        if "DRAFT" in str(location).upper() or "KOSONG" in str(location).upper():
+            status_str = f"NON-AKTIF ({location})"
+        else:
+            status_str = f"AKTIF ({location})"
     else:
         status_str = "AKTIF (ada di shopify)"
 
@@ -831,17 +834,19 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None, jpeg_thumbnail=
             "You are a luxury watch authentication and cataloging expert at IDWX.\n"
             "Analyze this luxury wristwatch image carefully.\n\n"
             "SPECIAL INSTRUCTION FOR SCREENSHOTS, PRODUCT CARDS, OR CATALOG LISTINGS:\n"
-            "- If the image is a screenshot, product card, website flyer, or catalog listing containing text/specifications (e.g. brand, model name, dial, reference, year, price, or location badge like 'Ready In Bali' or 'Consignment'), READ and EXTRACT that visible text directly to ensure exact identification!\n\n"
+            "- If the image is a screenshot of a mobile browser, app, or marketplace (e.g. idwx.co, Chrono24, Instagram), focus strictly on the featured watch in the main product view. Ignore browser address bars, status/dock icons, navigation menus, and buttons like 'Buy or Trade' or 'Sell or Consign'.\n"
+            "- If the card/screenshot contains visible specifications (brand, model name, dial, reference, year, price, or location badge like 'Ready In Bali'), extract that visible text directly.\n"
+            "- Special Brand Guidance: Dials featuring 'MARINA MILITARE', 'LUMINOR', 'RADIOMIR', '8 GIORNI BREVETTATO', or 'CALIFORNIA' belong to brand 'Panerai' (Officine Panerai). Identify specific PAM references (e.g. PAM 339, PAM 968, PAM 384, etc.) whenever possible.\n\n"
             "Identify:\n"
-            "1. brand: Brand name (e.g. Rolex, Hublot, Patek Philippe, Audemars Piguet, Omega, Tudor, Cartier, etc.)\n"
-            "2. model: Model / Series / Collection (e.g. Datejust 41, Big Bang Unico 42mm, Air King, Yacht-Master II 44mm, Historiques American 1921, Submariner Date, etc.)\n"
+            "1. brand: Brand name (e.g. Rolex, Panerai, Hublot, Patek Philippe, Audemars Piguet, Omega, Tudor, Cartier, etc.)\n"
+            "2. model: Model / Series / Collection (e.g. Radiomir Composite 8 Giorni 47mm, Datejust 41, Big Bang Unico 42mm, Air King, Yacht-Master II 44mm, Historiques American 1921, Submariner Date, etc.)\n"
             "3. year: Release / catalog year as a 4-digit string if visible in text or recognized (e.g. '2022', '2018', '2025', '2026', or empty string if uncertain)\n"
-            "4. dial_color: Dial color / key dial features (e.g. 'Wimbledon', 'Slate Grey', 'Black', 'Blue', 'Skeleton', 'Silver', 'Salmon', etc.)\n"
-            "5. reference: Reference or case number if visible or recognized (e.g. '126333', '116681', '126900', '441.NM.1170.RX', or empty string if uncertain)\n"
+            "4. dial_color: Dial color / key dial features (e.g. 'Wimbledon', 'Slate Grey', 'Black', 'Blue', 'Brown', 'Skeleton', 'Silver', 'Salmon', etc.)\n"
+            "5. reference: Reference or case number if visible or recognized (e.g. 'PAM 339', 'PAM00339', '126333', '116681', '126900', '441.NM.1170.RX', or empty string if uncertain)\n"
             "6. extracted_price: Numeric price in Rupiah (integer) if visible in image (e.g. 249000000, 258000000, 135000000, 359000000, or null if no price text)\n"
             "7. location_badge: Location / tag badge if visible on card (e.g. 'Ready In Bali', 'Consignment', or empty string)\n"
             "8. full_title_text: Full product title text as written on the card/screenshot if visible (e.g. 'DATEJUST 41MM TWOTONE YELLOWGOLD WIMBLEDON DIAL (2022)', 'BIG BANG UNICO 42MM TITANIUM CERAMIC (2026)', 'YACHT-MASTER II 44MM TWOTONE ROSEGOLD (2018)', 'AIR KING (2025)')\n"
-            "9. search_query: Search keywords optimized for searching Shopify inventory (e.g. 'Datejust 41 Wimbledon', 'Big Bang Unico 42mm Titanium Ceramic', 'Air King')\n"
+            "9. search_query: Search keywords optimized for searching Shopify inventory (e.g. 'Panerai Radiomir Composite 8 Giorni PAM 339', 'Datejust 41 Wimbledon', 'Big Bang Unico 42mm Titanium Ceramic', 'Air King')\n"
             "10. photo_type: Determine whether this image is 'photo_owner' or 'photo_studio':\n"
             "   - 'photo_owner': Casual photo taken by owner (e.g. on pillow/cushion, bed, sofa, car interior, desk, or wrist).\n"
             "   - 'photo_studio': Professional photo with plain lightbox/studio background or on a watch stand.\n\n"
@@ -849,7 +854,14 @@ def identify_watch_with_gemini(image_url=None, image_bytes=None, jpeg_thumbnail=
             "brand, model, year, dial_color, reference, extracted_price, location_badge, full_title_text, search_query, photo_type"
         )
 
-        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"]
+        models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash"
+        ]
         payload = {
             "contents": [{
                 "parts": [
@@ -967,7 +979,14 @@ def verify_watch_visually_with_gemini(inquiry_image_bytes, candidate_a, candidat
             }
         }
 
-        models_to_try = ["gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.6-flash"]
+        models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash"
+        ]
         for model_name in models_to_try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             try:
@@ -1076,41 +1095,40 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
     seen_product_ids = set()
     scored_candidates = []
 
-    search_gql = """
-    query searchProducts($query: String!) {
-      products(first: 20, query: $query) {
-        edges {
-          node {
-            id
-            title
-            tags
-            descriptionHtml
-            status
-            createdAt
-            featuredImage {
-              url
-            }
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  sku
-                  price
-                  inventoryQuantity
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    """
-
     for q in candidate_search_queries:
         if len(scored_candidates) >= 15:
             break
         try:
-            res = requests.post(graphql_url, headers=headers, json={"query": search_gql, "variables": {"query": q}}, timeout=15)
+            search_gql = f"""
+            {{
+              products(first: 20, query: {json.dumps(q)}) {{
+                edges {{
+                  node {{
+                    id
+                    title
+                    tags
+                    descriptionHtml
+                    status
+                    createdAt
+                    featuredImage {{
+                      url
+                    }}
+                    variants(first: 10) {{
+                      edges {{
+                        node {{
+                          id
+                          sku
+                          price
+                          inventoryQuantity
+                        }}
+                      }}
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            """
+            res = requests.post(graphql_url, headers=headers, json={"query": search_gql}, timeout=15)
             if res.status_code == 200:
                 data = res.json().get("data", {}).get("products", {}).get("edges", [])
                 for edge in data:
@@ -1267,6 +1285,85 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
         except Exception as e:
             print(f"⚠️ Error search Shopify GraphQL with query '{q}': {e}")
 
+    # Fallback: Jika tidak ditemukan kandidat produk AKTIF, cari produk non-aktif / DRAFT di Shopify
+    if not scored_candidates:
+        draft_queries = []
+        if ref:
+            draft_queries.append(ref)
+        if full_title_text:
+            draft_queries.append(re.sub(r'[\(\)\[\]\{\}]', ' ', full_title_text).strip())
+        if query_str:
+            draft_queries.append(re.sub(r'[\(\)\[\]\{\}]', ' ', query_str).strip())
+        if model_words:
+            draft_queries.append(' '.join(model_words[:2]))
+
+        for dq in draft_queries[:3]:
+            try:
+                search_gql_draft = f"""
+                {{
+                  products(first: 5, query: {json.dumps(dq)}) {{
+                    edges {{
+                      node {{
+                        id
+                        title
+                        tags
+                        descriptionHtml
+                        status
+                        createdAt
+                        featuredImage {{
+                          url
+                        }}
+                        variants(first: 5) {{
+                          edges {{
+                            node {{
+                              id
+                              sku
+                              price
+                              inventoryQuantity
+                            }}
+                          }}
+                        }}
+                      }}
+                    }}
+                  }}
+                }}
+                """
+                res = requests.post(graphql_url, headers=headers, json={"query": search_gql_draft}, timeout=15)
+                if res.status_code == 200:
+                    edges = res.json().get("data", {}).get("products", {}).get("edges", [])
+                    for edge in edges:
+                        p_node = edge.get("node", {})
+                        p_id = p_node.get("id")
+                        if not p_id or p_id in seen_product_ids:
+                            continue
+                        seen_product_ids.add(p_id)
+                        title_upper = (p_node.get("title") or "").upper()
+                        status_upper = (p_node.get("status") or "").upper()
+                        is_brand_match = any(bw.upper() in title_upper for bw in brand_words) if brand_words else True
+                        is_model_match = any(mw.upper() in title_upper for mw in model_words) if model_words else True
+                        if is_brand_match and is_model_match:
+                            v_edges = p_node.get("variants", {}).get("edges", [])
+                            chosen_v = v_edges[0].get("node", {}) if v_edges else {}
+                            if chosen_v.get("sku"):
+                                cand_price = float(chosen_v.get("price") or 0.0)
+                                scored_candidates.append({
+                                    "score": 100,
+                                    "product_node": p_node,
+                                    "variant_node": chosen_v,
+                                    "sku": (chosen_v.get("sku") or "").strip(),
+                                    "title": p_node.get("title", "").strip(),
+                                    "price": cand_price,
+                                    "image_url": (p_node.get("featuredImage") or {}).get("url"),
+                                    "created_at": p_node.get("createdAt"),
+                                    "location": f"DRAFT ({status_upper})",
+                                    "is_draft": True,
+                                    "tags": []
+                                })
+                    if scored_candidates:
+                        break
+            except Exception as e:
+                print(f"⚠️ Error fallback draft search: {e}")
+
     if not scored_candidates:
         return None
 
@@ -1317,7 +1414,8 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
         "title": best["title"],
         "numeric_price": best["price"],
         "formatted_price": format_rupiah(best["price"]),
-        "location": best.get("location", "ada di shopify")
+        "location": best.get("location", "ada di shopify"),
+        "is_draft": best.get("is_draft", False)
     }
 
 def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False, shopify_product=None):

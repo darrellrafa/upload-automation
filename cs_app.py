@@ -349,7 +349,12 @@ def parse_cs_inquiry_with_gemini(customer_msg, chat_history=None):
             "{\"intent\": \"...\", \"brand\": null or \"...\", \"min_price\": null or number, \"max_price\": null or number, \"model_keywords\": \"...\", \"search_query\": \"...\"}"
         )
 
-        models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
+        models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-3.8-flash",
+            "gemini-3.5-flash"
+        ]
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"response_mime_type": "application/json", "temperature": 0.1}
@@ -442,7 +447,12 @@ def generate_cs_response_with_gemini(customer_msg, matched_watches, intent_info,
         "Berikan balasan concierge yang ramah, membantu, dan elegan."
     )
 
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = [
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash"
+    ]
     payload = {
         "contents": [
             {"role": "user", "parts": [{"text": f"{system_instruction}\n\n{user_prompt}"}]}
