@@ -404,6 +404,17 @@ BLOGGER_SERVICE = None
 PROCESSED_MESSAGE_IDS = OrderedDict()
 MAX_PROCESSED_IDS = 300
 
+def register_sent_message_id(id_message):
+    """
+    Mencatat ID pesan yang dikirim oleh bot ke memori deduplikasi PROCESSED_MESSAGE_IDS
+    agar event webhook echo / loopback tidak memproses ulang pesan yang berasal dari bot sendiri.
+    """
+    if not id_message:
+        return
+    PROCESSED_MESSAGE_IDS[id_message] = time.time()
+    if len(PROCESSED_MESSAGE_IDS) > MAX_PROCESSED_IDS:
+        PROCESSED_MESSAGE_IDS.popitem(last=False)
+
 # ==============================================================================
 # 2. HELPER FUNCTIONS: PARSING & FORMATTING
 # ==============================================================================
@@ -1658,15 +1669,55 @@ def format_tanggal_indonesia():
     tahun = now.year
     return f"{nama_hari}, {tgl} {nama_bulan} {tahun}"
 
+def is_bot_report_message(text):
+    """
+    Mendeteksi apakah pesan merupakan laporan konfirmasi atau notifikasi sistem bot IDWX,
+    sehingga tidak boleh diproses sebagai perintah baru atau dimasukkan ke draft Foto Studio.
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    report_keywords = [
+        "laporan takedown",
+        "laporan sold",
+        "laporan on hold",
+        "laporan on_hold",
+        "laporan reprice",
+        "laporan repost",
+        "identifikasi jam tangan",
+        "identifikasi gagal",
+        "produk tidak ditemukan",
+        "tidak ada sesi identifikasi",
+        "gagal memproses perintah idwx",
+        "foto produk blogspot",
+        "foto blogspot tidak ditemukan",
+        "aksi cepat (balas pesan ini)",
+    ]
+    if any(kw in lower for kw in report_keywords):
+        return True
+
+    # Cek format pembatas bot dan kata kunci pendukung
+    if "━━━━━━━━━━━━━━━━━━" in text:
+        if any(marker in lower for marker in ["kode / sku", "diupdate oleh", "shopify:", "blogspot:", "spreadsheet"]):
+            return True
+
+    return False
+
 def is_valid_foto_studio_caption(caption, image_url):
     """
     Memvalidasi apakah pesan adalah input jam baru Foto Studio:
     1. WAJIB melampirkan foto/gambar (image_url harus ada).
-    2. Menghapus URL/link sebelum memeriksa garis miring pemisah (agar URL tidak disangka format jam).
-    3. Setelah URL dihapus, harus ada pemisah '/' dengan minimal 2 bagian (contoh: [Nama Jam] / [SN / Owner]).
-    4. Nama produk (bagian pertama) tidak boleh berisikan kata-kata obrolan, meeting, briefing, pengumuman, dll.
+    2. Menolak pesan laporan/notifikasi bot IDWX.
+    3. Menghapus URL/link sebelum memeriksa garis miring pemisah (agar URL tidak disangka format jam).
+    4. Setelah URL dihapus, harus ada pemisah '/' dengan minimal 2 bagian (contoh: [Nama Jam] / [SN / Owner]).
+    5. Nama produk (bagian pertama) tidak boleh berisikan kata-kata obrolan, meeting, briefing, pengumuman, dll.
+    6. Bagian pertama (nama jam) tidak boleh memuat baris baru (\n atau \r) dan panjang 3-80 karakter.
     """
     if not image_url or not caption:
+        return False
+
+    # Filter mutlak: Laporan atau notifikasi bot IDWX tidak boleh masuk ke History Foto Studio
+    if is_bot_report_message(caption):
         return False
 
     # Hapus URL dari caption agar karakter '/' di http://, https://, link meet dll tidak dihitung
@@ -1678,7 +1729,9 @@ def is_valid_foto_studio_caption(caption, image_url):
     ignored_keywords = [
         "meeting", "briefing", "google meet", "zoom", "teams", "selamat pagi", "selamat siang",
         "selamat sore", "selamat malam", "terima kasih", "thank you", "jadwal", "agenda",
-        "video call", "joining info", "reminder"
+        "video call", "joining info", "reminder", "laporan takedown", "laporan sold",
+        "laporan reprice", "laporan repost", "laporan on hold", "identifikasi jam tangan",
+        "identifikasi gagal", "shopify:", "blogspot:", "spreadsheet ("
     ]
     lower_text = clean_text.lower()
     for kw in ignored_keywords:
@@ -1690,8 +1743,13 @@ def is_valid_foto_studio_caption(caption, image_url):
     if len(parts) < 2:
         return False
 
-    # Bagian pertama adalah nama jam/model: tidak boleh terlalu panjang seperti paragraf (> 80 karakter)
-    if len(parts[0]) > 80:
+    # Bagian pertama adalah nama jam/model:
+    # 1. Tidak boleh memuat karakter baris baru (\n atau \r) karena nama jam tangan ditulis dalam satu baris sebelum '/'
+    # 2. Panjang nama jam minimal 3 dan maksimal 80 karakter
+    if "\n" in parts[0] or "\r" in parts[0]:
+        return False
+
+    if len(parts[0]) < 3 or len(parts[0]) > 80:
         return False
 
     return True
@@ -1971,6 +2029,8 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post
             if res.status_code == 200:
                 try:
                     id_message = res.json().get("idMessage")
+                    if id_message:
+                        register_sent_message_id(id_message)
                 except Exception:
                     id_message = None
                 print(f"📷 Green API menerima sendFileByUrl (idMessage: {id_message}, URL: {final_image_url})")
@@ -1998,7 +2058,14 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post
                     if len(pesan_text) > 1024:
                         sisa_pesan = "..." + pesan_text[1020:]
                         url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
-                        requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+                        res_cont = requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+                        if res_cont.status_code == 200:
+                            try:
+                                id_cont = res_cont.json().get("idMessage")
+                                if id_cont:
+                                    register_sent_message_id(id_cont)
+                            except Exception:
+                                pass
             else:
                 print(f"⚠️ Green API sendFileByUrl gagal (Status {res.status_code}): {res.text}.")
 
@@ -2012,12 +2079,25 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post
                     payload_file["urlFile"] = shopify_backup
                     res_backup = requests.post(url_file, json=payload_file, timeout=20)
                     if res_backup.status_code == 200:
+                        try:
+                            id_backup = res_backup.json().get("idMessage")
+                            if id_backup:
+                                register_sent_message_id(id_backup)
+                        except Exception:
+                            pass
                         print(f"📷 Berhasil mengirim feedback WA beserta foto cadangan Shopify ke {chat_id}")
                         sent_image = True
                         if len(pesan_text) > 1024:
                             sisa_pesan = "..." + pesan_text[1020:]
                             url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
-                            requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+                            res_cont2 = requests.post(url_txt, json={"chatId": chat_id, "message": sisa_pesan}, timeout=10)
+                            if res_cont2.status_code == 200:
+                                try:
+                                    id_cont2 = res_cont2.json().get("idMessage")
+                                    if id_cont2:
+                                        register_sent_message_id(id_cont2)
+                                except Exception:
+                                    pass
                     else:
                         print(f"⚠️ Kirim foto cadangan Shopify juga gagal: {res_backup.text}")
 
@@ -2028,6 +2108,12 @@ def kirim_balasan_wa(chat_id, pesan_text, image_url=None, sku=None, blogger_post
             payload = {"chatId": chat_id, "message": pesan_text}
             res_txt = requests.post(url, json=payload, timeout=10)
             if res_txt.status_code == 200:
+                try:
+                    id_txt = res_txt.json().get("idMessage")
+                    if id_txt:
+                        register_sent_message_id(id_txt)
+                except Exception:
+                    pass
                 print(f"💬 Berhasil mengirim feedback pesan teks ke {chat_id}")
             else:
                 print(f"⚠️ Gagal kirim pesan teks ke Green API (Status {res_txt.status_code}): {res_txt.text}")
@@ -2061,7 +2147,14 @@ def kirim_semua_foto_wa(chat_id, image_urls, sku, post_title=""):
     )
     url_txt = f"https://api.green-api.com/waInstance{GREEN_API_ID_INSTANCE}/sendMessage/{GREEN_API_API_TOKEN}"
     try:
-        requests.post(url_txt, json={"chatId": chat_id, "message": pesan_header}, timeout=10)
+        res_hdr = requests.post(url_txt, json={"chatId": chat_id, "message": pesan_header}, timeout=10)
+        if res_hdr.status_code == 200:
+            try:
+                id_hdr = res_hdr.json().get("idMessage")
+                if id_hdr:
+                    register_sent_message_id(id_hdr)
+            except Exception:
+                pass
     except Exception as e:
         print(f"⚠️ Gagal kirim pesan pengantar foto: {e}")
 
@@ -2077,6 +2170,12 @@ def kirim_semua_foto_wa(chat_id, image_urls, sku, post_title=""):
             }
             res = requests.post(url_file, json=payload_file, timeout=25)
             if res.status_code == 200:
+                try:
+                    id_img = res.json().get("idMessage")
+                    if id_img:
+                        register_sent_message_id(id_img)
+                except Exception:
+                    pass
                 success_count += 1
                 print(f"   📷 WA Foto [{idx}/{total}] terkirim ke {chat_id}")
             else:
@@ -3772,6 +3871,11 @@ def wa_webhook():
         else:
             return jsonify({"status": "ignored", "reason": "Unsupported message type"}), 200
 
+        # Filter Laporan / Notifikasi Bot IDWX: Abaikan agar tidak diproses ulang / masuk draft
+        if is_bot_report_message(caption):
+            print(f"⏭️ Diabaikan: Pesan terdeteksi sebagai Laporan/Notifikasi Bot IDWX, bukan perintah atau input baru.")
+            return jsonify({"status": "ignored", "reason": "Bot report or notification ignored"}), 200
+
         # ======================================================================
         # JALUR 0: IDENTIFIKASI JAM TANGAN DARI FOTO (MULTIMODAL GEMINI VISION)
         # ======================================================================
@@ -4625,6 +4729,11 @@ def wa_webhook():
         # ======================================================================
         # JALUR D: INPUT DRAFT JAM BARU (FOTO STUDIO WA)
         # ======================================================================
+        # Filter mutlak: Laporan bot tidak boleh masuk draft Foto Studio
+        if is_bot_report_message(caption):
+            print(f"⏭️ Diabaikan: Pesan terdeteksi sebagai Laporan/Notifikasi Bot IDWX, tidak dimasukkan ke History Foto Studio.")
+            return jsonify({"status": "ignored", "reason": "Bot report not accepted in photo studio"}), 200
+
         # Validasi ketat: Wajib melampirkan foto & format caption jam tangan valid
         if not is_valid_foto_studio_caption(caption, image_url):
             print(f"⏭️ Diabaikan: Pesan bukan perintah REPRICE/TAKEDOWN/REPOST dan bukan format foto studio jam baru yang valid.")

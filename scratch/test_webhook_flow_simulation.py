@@ -716,5 +716,110 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("CARTIER PANTHÈRE S SILVER DIAL", last_wa_msg)
         self.assertIn("Ref. WSPN0006", last_wa_msg)
 
+    @patch("requests.post")
+    def test_bot_takedown_report_never_enters_photo_studio(self, mock_post):
+        chat_id = "test-group@g.us"
+        takedown_report_caption = (
+            "🗑️ *LAPORAN TAKEDOWN IDWX*\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🔢 *Kode / SKU:* 079\n"
+            "👤 *Diupdate oleh:* Dylan Baru\n\n"
+            "✅ *Shopify:* V32 BLUE TIFFANY (2026)\n"
+            "   • Status: *DRAFT*\n"
+            "   • Stock: *0*\n"
+            "✅ *Blogspot:* Dipindahkan ke Sampah (Trash)\n"
+            "   • Judul: [FOR SALE] FRANCK MULLER V32 BLUE TIFFANY (2026)\n"
+            "   • Publish Date: 11 May 2026\n"
+            "✅ *Spreadsheet (Consignment PS):* Status diubah ke *Takedown* (Baris 2262, Tab PHOTO STUDIO)\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "FRANCK MULLER V32 BLUE TIFFANY\n"
+            "Ref. V32 SC AT FO AC13\n"
+            "Size 32mm, Automatic Movement\n"
+            "Box & Paper\n"
+            "Warranty Until April 2028\n"
+            "Never Been Worn Condition\n"
+            "Price: Rp 88,000,000\n"
+            "Code: 079"
+        )
+        photo_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-takedown-report-001",
+            "senderData": {
+                "chatId": chat_id,
+                "senderName": "Dylan Baru"
+            },
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": "https://example.com/franck_muller.jpg",
+                    "caption": takedown_report_caption
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=photo_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "ignored")
+        self.assertEqual(res.get("reason"), "Bot report or notification ignored")
+        # Pastikan Apps Script History Foto Studio TIDAK PERNAH dipanggil!
+        mock_post.assert_not_called()
+
+    def test_is_valid_foto_studio_caption_validation(self):
+        # Valid creative captions
+        self.assertTrue(flask_app.is_valid_foto_studio_caption(
+            "Lange 1 Time Zone, Aug 2008 / 172521 / Franky", "https://example.com/img.jpg"
+        ))
+        self.assertTrue(flask_app.is_valid_foto_studio_caption(
+            "ROLEX DATEJUST 41 / 126333 / STAFF", "https://example.com/img.jpg"
+        ))
+        self.assertTrue(flask_app.is_valid_foto_studio_caption(
+            "TAG HEUER CARRERA / CALIBRE 16", "https://example.com/img.jpg"
+        ))
+
+        # Invalid: Bot reports (Takedown, Sold, Reprice, Repost, Identifikasi)
+        takedown_text = (
+            "🗑️ *LAPORAN TAKEDOWN IDWX*\n━━━━━━━━━━━━━━━━━━\n🔢 *Kode / SKU:* 079\n👤 *Diupdate oleh:* Dylan Baru"
+        )
+        self.assertFalse(flask_app.is_valid_foto_studio_caption(takedown_text, "https://example.com/img.jpg"))
+
+        sold_text = (
+            "🏷️ *LAPORAN SOLD IDWX*\n━━━━━━━━━━━━━━━━━━\n🔢 *Kode / SKU:* 09R8215\n👤 *Diupdate oleh:* Dylan Baru"
+        )
+        self.assertFalse(flask_app.is_valid_foto_studio_caption(sold_text, "https://example.com/img.jpg"))
+
+        identifikasi_text = (
+            "⌚ *IDENTIFIKASI JAM TANGAN IDWX*\n━━━━━━━━━━━━━━━━━━\n📌 *Merek & Seri:* DATEJUST\n🔢 *Kode / SKU:* CPO-01"
+        )
+        self.assertFalse(flask_app.is_valid_foto_studio_caption(identifikasi_text, "https://example.com/img.jpg"))
+
+        # Invalid: Multiline title before slash
+        multiline_title = "Rolex Submariner\nYear 2020 / 123456 / John"
+        self.assertFalse(flask_app.is_valid_foto_studio_caption(multiline_title, "https://example.com/img.jpg"))
+
+        # Invalid: No image URL
+        self.assertFalse(flask_app.is_valid_foto_studio_caption("Rolex Submariner / 123456", None))
+        self.assertFalse(flask_app.is_valid_foto_studio_caption("Rolex Submariner / 123456", ""))
+
+        # Invalid: Meeting / Chat messages
+        self.assertFalse(flask_app.is_valid_foto_studio_caption("Meeting jam 2 / Zoom link", "https://example.com/img.jpg"))
+
+    def test_register_sent_message_id_deduplication(self):
+        test_id = "msg-unique-test-999"
+        flask_app.register_sent_message_id(test_id)
+        self.assertIn(test_id, flask_app.PROCESSED_MESSAGE_IDS)
+
+        payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": test_id,
+            "senderData": {"chatId": "test-group@g.us", "senderName": "Dylan Baru"},
+            "messageData": {"typeMessage": "textMessage", "textMessageData": {"textMessage": "sold 123"}}
+        }
+        flask_app.request.get_json = MagicMock(return_value=payload)
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("status"), "ignored")
+        self.assertEqual(res.get("reason"), "Duplicate message ID")
+
 if __name__ == "__main__":
     unittest.main()
