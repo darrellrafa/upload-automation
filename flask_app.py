@@ -1378,7 +1378,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
     if is_consign_po or sku.upper().startswith("CPO"):
         sheet_info = "PHOTO OWNER"
         try:
-            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku}, timeout=15)
+            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku, "require_available": True, "filter_status": "Available"}, timeout=15)
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success" and data.get("row"):
@@ -1396,7 +1396,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
     if is_consign_ps:
         sheet_info = "PHOTO STUDIO"
         try:
-            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku}, timeout=15)
+            res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku, "require_available": True, "filter_status": "Available"}, timeout=15)
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success" and data.get("row"):
@@ -1412,7 +1412,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
 
     # 3. Default atau FEATURED: Cek Spreadsheet Slow Moving (Tab ALL STOCK)
     try:
-        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json={"action": "query_sku", "sku": canonical_sku, "canonical_sku": canonical_sku}, timeout=15)
+        res = requests.post(APPS_SCRIPT_SLOW_MOVING_URL, json={"action": "query_sku", "sku": canonical_sku, "canonical_sku": canonical_sku, "require_available": True, "filter_status": "Available"}, timeout=15)
         if res.status_code == 200:
             data = res.json()
             if data.get("status") == "success" and data.get("row"):
@@ -1425,7 +1425,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
 
     # Fallback cek Consignment PHOTO STUDIO jika di Slow Moving tidak terdata
     try:
-        res_alt = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku}, timeout=15)
+        res_alt = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku, "require_available": True, "filter_status": "Available"}, timeout=15)
         if res_alt.status_code == 200:
             data_alt = res_alt.json()
             if data_alt.get("status") == "success" and data_alt.get("row"):
@@ -1440,7 +1440,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
 
     # Fallback cek Consignment PHOTO OWNER jika masih belum ketemu
     try:
-        res_alt_po = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku}, timeout=15)
+        res_alt_po = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku, "require_available": True, "filter_status": "Available"}, timeout=15)
         if res_alt_po.status_code == 200:
             data_alt_po = res_alt_po.json()
             if data_alt_po.get("status") == "success" and data_alt_po.get("row"):

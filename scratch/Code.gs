@@ -42,6 +42,9 @@ function doPost(e) {
 
       var skuQ = (data.sku || "").toString().trim().toLowerCase();
       var baseSkuQ = skuQ.replace(/-\d+$/, '');
+      // Rules: Default harus yang statusnya Available agar tepat sasaran (tidak salah ambil baris yang Sold / Takedown / Hold)
+      var requireAvailable = (data.require_available !== false);
+      var filterStatus = (data.filter_status || data.status || "").toString().trim().toLowerCase();
       var foundRowQ = -1;
       var foundStatusQ = "";
       var foundTabName = "";
@@ -55,6 +58,18 @@ function doPost(e) {
         if (!sheetQuery) continue;
         var valsQ = sheetQuery.getDataRange().getValues();
         for (var i = valsQ.length - 1; i >= 1; i--) {
+          var rawStatus = (valsQ[i][0] || "").toString().trim();
+          var statusVal = rawStatus.toLowerCase();
+          var isAvailable = (statusVal === "available" || statusVal.indexOf("avail") === 0 || statusVal === "reprice" || statusVal === "repost" || statusVal === "reprice/post" || statusVal === "reprice / post");
+
+          // Filter status: pastikan baris yang dipilih berstatus Available
+          if (requireAvailable && !isAvailable) {
+            continue;
+          }
+          if (filterStatus && statusVal !== filterStatus && statusVal.indexOf(filterStatus) === -1) {
+            continue;
+          }
+
           var rawColC = (valsQ[i].length > 2 ? (valsQ[i][2] || "") : "").toString().trim().toLowerCase();
           var rawColG = (valsQ[i].length > 6 ? (valsQ[i][6] || "") : "").toString().trim().toLowerCase();
           var colC = rawColC.split('\n')[0].trim();

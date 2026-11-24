@@ -218,18 +218,23 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         mock_res.json.return_value = {
             "status": "success",
             "tab_name": "PHOTO OWNER",
-            "row": 85,
+            "row": 1681,
             "form": "ROLEX DATEJUST 36MM GREEN OMBRE DIAL (2026)\nRef. 126234\nSize 36mm, Automatic Caliber 3235\nBox & Paper (Nov 2026)\nBrand New Condition",
             "owner": "Budi",
             "sales": ""
         }
 
-        with patch("requests.post", return_value=mock_res):
+        with patch("requests.post", return_value=mock_res) as mock_post:
             sheet_info, form, owner, sales = resolve_watch_spreadsheet_location("CPO-201126-02", return_form=True)
-            self.assertEqual(sheet_info, "PHOTO OWNER (Baris 85)")
+            self.assertEqual(sheet_info, "PHOTO OWNER (Baris 1681)")
             self.assertIn("DATEJUST 36MM GREEN OMBRE DIAL", form)
             self.assertIn("Ref. 126234", form)
             self.assertEqual(owner, "Budi")
+
+            # Verifikasi payload mengandung require_available=True dan filter_status='Available'
+            call_args = mock_post.call_args
+            self.assertTrue(call_args[1]["json"].get("require_available"))
+            self.assertEqual(call_args[1]["json"].get("filter_status"), "Available")
 
     def test_resolve_watch_spreadsheet_location_for_photo_owner_fallback_shopify(self):
         from unittest.mock import patch, MagicMock
@@ -281,7 +286,7 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             title="DATEJUST 36MM GREEN OMBRE DIAL (2026)",
             sku="CPO-201126-02",
             formatted_price="Rp 215,000,000",
-            sheet_info="PHOTO OWNER (Baris 85)",
+            sheet_info="PHOTO OWNER (Baris 1681)",
             location="ada di shopify",
             form_content=form_sample
         )
@@ -290,7 +295,7 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("🔢 *Kode / SKU:* CPO-201126-02", msg)
         self.assertIn("💰 *Harga Saat Ini:* Rp 215,000,000", msg)
         self.assertIn("📦 *Status:* AKTIF (ada di shopify)", msg)
-        self.assertIn("📊 *Spreadsheet:* PHOTO OWNER (Baris 85)", msg)
+        self.assertIn("📊 *Spreadsheet:* PHOTO OWNER (Baris 1681)", msg)
         self.assertIn("ROLEX DATEJUST 36MM GREEN OMBRE DIAL (2026)", msg)
         self.assertIn("Ref. 126234", msg)
         self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
@@ -298,7 +303,7 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("Note: [harga] di-isi dengan, contoh: 20jt atau bisa juga 20,000,000.", msg)
 
         # Pastikan Form spesifikasi Kolom D terselip tepat di antara Spreadsheet info dan Aksi Cepat
-        pos_sheet = msg.find("📊 *Spreadsheet:* PHOTO OWNER (Baris 85)")
+        pos_sheet = msg.find("📊 *Spreadsheet:* PHOTO OWNER (Baris 1681)")
         pos_form = msg.find("Ref. 126234")
         pos_action = msg.find("👉 *Aksi Cepat (Balas pesan ini):*")
         self.assertTrue(pos_sheet < pos_form < pos_action)
