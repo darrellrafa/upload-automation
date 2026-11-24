@@ -761,8 +761,9 @@ def format_watch_identification_message(title, sku, formatted_price, sheet_info,
     msg += (
         f"\n👉 *Aksi Cepat (Balas pesan ini):*\n"
         f"• Ketik *sold* untuk menandai laku\n"
+        f"• Ketik *takedown* untuk takedown barang\n"
         f"• Ketik *on hold* untuk simpan/hold\n"
-        f"• Ketik *reprice [harga]* untuk ubah harga\n"
+        f"• Ketik *reprice / harga baru [harga]* untuk ubah harga\n"
         f"• Ketik *batal* jika tidak ada tindakan\n"
         f"Note: [harga] di-isi dengan, contoh: 20jt atau bisa juga 20,000,000."
     )

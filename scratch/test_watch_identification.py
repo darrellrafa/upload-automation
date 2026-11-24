@@ -145,8 +145,9 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
         self.assertIn("📊 *Spreadsheet:* ALL STOCK (Baris 313)", msg)
         self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
         self.assertIn("• Ketik *sold* untuk menandai laku", msg)
+        self.assertIn("• Ketik *takedown* untuk takedown barang", msg)
         self.assertIn("• Ketik *on hold* untuk simpan/hold", msg)
-        self.assertIn("• Ketik *reprice [harga]* untuk ubah harga", msg)
+        self.assertIn("• Ketik *reprice / harga baru [harga]* untuk ubah harga", msg)
         self.assertIn("• Ketik *batal* jika tidak ada tindakan", msg)
         self.assertIn("Note: [harga] di-isi dengan, contoh: 20jt atau bisa juga 20,000,000.", msg)
 
