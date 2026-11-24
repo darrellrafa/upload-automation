@@ -55,19 +55,51 @@ function doPost(e) {
         if (!sheetQuery) continue;
         var valsQ = sheetQuery.getDataRange().getValues();
         for (var i = valsQ.length - 1; i >= 1; i--) {
-          var skuValC = (valsQ[i][2] || "").toString().trim().toLowerCase();
-          var skuValG = (valsQ[i].length > 6 ? (valsQ[i][6] || "") : "").toString().trim().toLowerCase();
-          if (skuValC === skuQ || skuValC === baseSkuQ || skuValC.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '') ||
-              skuValG === skuQ || skuValG === baseSkuQ || skuValG.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '')) {
+          var rawColC = (valsQ[i].length > 2 ? (valsQ[i][2] || "") : "").toString().trim().toLowerCase();
+          var rawColG = (valsQ[i].length > 6 ? (valsQ[i][6] || "") : "").toString().trim().toLowerCase();
+          var colC = rawColC.split('\n')[0].trim();
+          var colG = rawColG.split('\n')[0].trim();
+
+          var isMatchC = (colC === skuQ || colC === baseSkuQ || colC.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '') ||
+                          colC.replace(/-\d+$/, '') === baseSkuQ || (skuQ.length >= 4 && rawColC.indexOf(skuQ) === 0));
+          var isMatchG = (colG === skuQ || colG === baseSkuQ || colG.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '') ||
+                          colG.replace(/-\d+$/, '') === baseSkuQ || (skuQ.length >= 4 && rawColG.indexOf(skuQ) === 0));
+
+          var rowMatched = isMatchC || isMatchG;
+
+          if (!rowMatched) {
+            // Cek semua kolom lainnya (termasuk Kolom D / FORM dan Kolom E / OWNER)
+            for (var j = 0; j < valsQ[i].length; j++) {
+              if (j === 2 || j === 6) continue;
+              var cellVal = (valsQ[i][j] || "").toString().trim().toLowerCase();
+              if (cellVal === skuQ || cellVal === baseSkuQ || cellVal.split('\n')[0].trim() === skuQ ||
+                  cellVal.replace(/\s+/g, '') === skuQ.replace(/\s+/g, '') ||
+                  (skuQ.length >= 5 && cellVal.indexOf(skuQ) !== -1)) {
+                rowMatched = true;
+                break;
+              }
+            }
+          }
+
+          if (rowMatched) {
             foundRowQ = i + 1;
             foundStatusQ = (valsQ[i][0] || "").toString().trim();
             foundTabName = targetSheetName;
             // Kolom D (index 3) adalah isi format form konsinyasi
             foundFormQ = (valsQ[i].length > 3 ? (valsQ[i][3] || "") : "").toString().trim();
-            // Kolom E (index 4) adalah OWNER, Kolom F (index 5) adalah SALES (khusus tab PHOTO STUDIO)
             if (targetSheetName === "PHOTO STUDIO") {
               foundOwnerQ = (valsQ[i].length > 4 ? (valsQ[i][4] || "") : "").toString().trim();
               foundSalesQ = (valsQ[i].length > 5 ? (valsQ[i][5] || "") : "").toString().trim();
+            } else if (targetSheetName === "PHOTO OWNER") {
+              foundOwnerQ = (valsQ[i].length > 4 ? (valsQ[i][4] || "") : "").toString().trim();
+            }
+            if (!foundOwnerQ && foundFormQ) {
+              var mOwner = foundFormQ.match(/(?:^|\n)\s*(?:Nama|Owner)\s*:\s*([^\n\r]+)/i);
+              if (mOwner) foundOwnerQ = mOwner[1].trim();
+            }
+            if (!foundSalesQ && foundFormQ) {
+              var mSales = foundFormQ.match(/(?:^|\n)\s*(?:Order\s+received\s+by|Sales)\s*:\s*([^\n\r]+)/i);
+              if (mSales) foundSalesQ = mSales[1].trim();
             }
             break;
           }
@@ -117,16 +149,21 @@ function doPost(e) {
         if (!isStatusValid) continue;
 
         // Cek Kolom C (index 2) dan Kolom G (index 6) terlebih dahulu
-        var skuValC = (valuesReprice[i][2] || "").toString().trim().toLowerCase();
-        var skuValG = (valuesReprice[i].length > 6 ? (valuesReprice[i][6] || "") : "").toString().trim().toLowerCase();
+        var rawSkuValC = (valuesReprice[i][2] || "").toString().trim().toLowerCase();
+        var rawSkuValG = (valuesReprice[i].length > 6 ? (valuesReprice[i][6] || "") : "").toString().trim().toLowerCase();
+        var skuValC = rawSkuValC.split('\n')[0].trim();
+        var skuValG = rawSkuValG.split('\n')[0].trim();
         var isSkuMatch = (skuValC === skuToFindReprice || skuValC === baseSkuToFindReprice || skuValC.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, '') ||
-                          skuValG === skuToFindReprice || skuValG === baseSkuToFindReprice || skuValG.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, ''));
+                          skuValG === skuToFindReprice || skuValG === baseSkuToFindReprice || skuValG.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, '') ||
+                          rawSkuValG.indexOf(skuToFindReprice) === 0 || rawSkuValC.indexOf(skuToFindReprice) === 0);
         
         if (!isSkuMatch) {
           for (var j = 0; j < valuesReprice[i].length; j++) {
             if (j === 2 || j === 6) continue;
             var cellVal = (valuesReprice[i][j] || "").toString().trim().toLowerCase();
-            if (cellVal === skuToFindReprice || cellVal === baseSkuToFindReprice || cellVal.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, '')) {
+            if (cellVal === skuToFindReprice || cellVal === baseSkuToFindReprice || cellVal.split('\n')[0].trim() === skuToFindReprice ||
+                cellVal.replace(/\s+/g, '') === skuToFindReprice.replace(/\s+/g, '') ||
+                (skuToFindReprice.length >= 5 && cellVal.indexOf(skuToFindReprice) !== -1)) {
               isSkuMatch = true;
               break;
             }
@@ -333,10 +370,13 @@ function doPost(e) {
       
       for (var i = values.length - 1; i >= 1; i--) {
         // Cek kolom C (index 2) dan kolom G (index 6) terlebih dahulu
-        var skuValC = (values[i][2] || "").toString().trim().toLowerCase();
-        var skuValG = (values[i].length > 6 ? (values[i][6] || "") : "").toString().trim().toLowerCase();
+        var rawSkuValC = (values[i][2] || "").toString().trim().toLowerCase();
+        var rawSkuValG = (values[i].length > 6 ? (values[i][6] || "") : "").toString().trim().toLowerCase();
+        var skuValC = rawSkuValC.split('\n')[0].trim();
+        var skuValG = rawSkuValG.split('\n')[0].trim();
         if (skuValC === skuToFind || skuValC === baseSkuToFind || skuValC.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '') ||
-            skuValG === skuToFind || skuValG === baseSkuToFind || skuValG.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '')) {
+            skuValG === skuToFind || skuValG === baseSkuToFind || skuValG.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '') ||
+            rawSkuValG.indexOf(skuToFind) === 0 || rawSkuValC.indexOf(skuToFind) === 0) {
           foundRow = i + 1;
           break;
         }
@@ -345,7 +385,9 @@ function doPost(e) {
         for (var j = 0; j < values[i].length; j++) {
           if (j === 2 || j === 6) continue;
           var cellVal = (values[i][j] || "").toString().trim().toLowerCase();
-          if (cellVal === skuToFind || cellVal === baseSkuToFind || cellVal.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '')) {
+          if (cellVal === skuToFind || cellVal === baseSkuToFind || cellVal.split('\n')[0].trim() === skuToFind ||
+              cellVal.replace(/\s+/g, '') === skuToFind.replace(/\s+/g, '') ||
+              (skuToFind.length >= 5 && cellVal.indexOf(skuToFind) !== -1)) {
             rowMatched = true;
             break;
           }

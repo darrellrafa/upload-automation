@@ -209,6 +209,100 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             sheet_info_only = resolve_watch_spreadsheet_location("88702793", blogger_post={"labels": ["CONSIGNMENT_PS"]})
             self.assertEqual(sheet_info_only, "PHOTO STUDIO (Baris 2819)")
 
+    def test_resolve_watch_spreadsheet_location_for_photo_owner_success(self):
+        from unittest.mock import patch, MagicMock
+        from flask_app import resolve_watch_spreadsheet_location
+
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "status": "success",
+            "tab_name": "PHOTO OWNER",
+            "row": 85,
+            "form": "ROLEX DATEJUST 36MM GREEN OMBRE DIAL (2026)\nRef. 126234\nSize 36mm, Automatic Caliber 3235\nBox & Paper (Nov 2026)\nBrand New Condition",
+            "owner": "Budi",
+            "sales": ""
+        }
+
+        with patch("requests.post", return_value=mock_res):
+            sheet_info, form, owner, sales = resolve_watch_spreadsheet_location("CPO-201126-02", return_form=True)
+            self.assertEqual(sheet_info, "PHOTO OWNER (Baris 85)")
+            self.assertIn("DATEJUST 36MM GREEN OMBRE DIAL", form)
+            self.assertIn("Ref. 126234", form)
+            self.assertEqual(owner, "Budi")
+
+    def test_resolve_watch_spreadsheet_location_for_photo_owner_fallback_shopify(self):
+        from unittest.mock import patch, MagicMock
+        from flask_app import resolve_watch_spreadsheet_location
+
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.json.return_value = {
+            "status": "not_found",
+            "tab_name": "PHOTO OWNER",
+            "message": "SKU tidak ditemukan"
+        }
+
+        mock_shopify_prod = {
+            "title": "DATEJUST 36MM GREEN OMBRE DIAL (2026)",
+            "descriptionHtml": (
+                "<p>ROLEX DATEJUST 36MM GREEN OMBRE DIAL (2026)<br>"
+                "Ref. 126234<br>"
+                "Size 36mm, Automatic Caliber 3235<br>"
+                "Box & Paper (Nov 2026)<br>"
+                "Brand New Condition<br>"
+                "Price: Rp 215,000,000<br>"
+                "Nama : Pak Anton<br>"
+                "Order received by : yusup</p>"
+            )
+        }
+
+        with patch("requests.post", return_value=mock_res):
+            sheet_info, form, owner, sales = resolve_watch_spreadsheet_location(
+                "CPO-201126-02",
+                return_form=True,
+                shopify_product=mock_shopify_prod
+            )
+            self.assertEqual(sheet_info, "PHOTO OWNER")
+            self.assertIn("Ref. 126234", form)
+            self.assertIn("Brand New Condition", form)
+            self.assertEqual(owner, "Pak Anton")
+            self.assertEqual(sales, "yusup")
+
+    def test_identification_message_for_photo_owner_with_form(self):
+        form_sample = (
+            "ROLEX DATEJUST 36MM GREEN OMBRE DIAL (2026)\n\n"
+            "Ref. 126234\n"
+            "Size 36mm, Automatic Caliber 3235\n"
+            "Box & Paper (Nov 2026)\n"
+            "Brand New Condition"
+        )
+        msg = format_watch_identification_message(
+            title="DATEJUST 36MM GREEN OMBRE DIAL (2026)",
+            sku="CPO-201126-02",
+            formatted_price="Rp 215,000,000",
+            sheet_info="PHOTO OWNER (Baris 85)",
+            location="ada di shopify",
+            form_content=form_sample
+        )
+        self.assertIn("⌚ *IDENTIFIKASI JAM TANGAN IDWX*", msg)
+        self.assertIn("📌 *Merek & Seri:* DATEJUST 36MM GREEN OMBRE DIAL (2026)", msg)
+        self.assertIn("🔢 *Kode / SKU:* CPO-201126-02", msg)
+        self.assertIn("💰 *Harga Saat Ini:* Rp 215,000,000", msg)
+        self.assertIn("📦 *Status:* AKTIF (ada di shopify)", msg)
+        self.assertIn("📊 *Spreadsheet:* PHOTO OWNER (Baris 85)", msg)
+        self.assertIn("ROLEX DATEJUST 36MM GREEN OMBRE DIAL (2026)", msg)
+        self.assertIn("Ref. 126234", msg)
+        self.assertIn("👉 *Aksi Cepat (Balas pesan ini):*", msg)
+        self.assertIn("• Ketik *batal* jika tidak ada tindakan", msg)
+        self.assertIn("Note: [harga] di-isi dengan, contoh: 20jt atau bisa juga 20,000,000.", msg)
+
+        # Pastikan Form spesifikasi Kolom D terselip tepat di antara Spreadsheet info dan Aksi Cepat
+        pos_sheet = msg.find("📊 *Spreadsheet:* PHOTO OWNER (Baris 85)")
+        pos_form = msg.find("Ref. 126234")
+        pos_action = msg.find("👉 *Aksi Cepat (Balas pesan ini):*")
+        self.assertTrue(pos_sheet < pos_form < pos_action)
+
     def test_identification_message_with_owner_and_sales_for_photo_studio(self):
         form_sample = (
             "Nama : Said\n"

@@ -1317,12 +1317,13 @@ def find_active_watch_in_shopify(gemini_info, user_caption=""):
         "location": best.get("location", "ada di shopify")
     }
 
-def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False):
+def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False, shopify_product=None):
     """
     Menentukan lokasi spreadsheet (Nama Tab & Nomor Baris), isi formulir konsinyasi (Kolom D),
     Owner (Kolom E tab PHOTO STUDIO atau tab ALL STOCK), dan Sales (Kolom F tab PHOTO STUDIO) untuk jam tangan yang diidentifikasi.
     Format yang dihasilkan: "ALL STOCK (Baris 313)" atau "PHOTO STUDIO (Baris 142)"
     Jika return_form=True, mengembalikan tuple (sheet_info, form_content, owner, sales).
+    Mendukung fallback cerdas deskripsi jam dari shopify_product (descriptionHtml) atau blogger_post jika query spreadsheet belum mengembalikan form.
     """
     is_consign_ps = False
     is_consign_po = False
@@ -1340,8 +1341,42 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
     owner = ""
     sales = ""
 
+    def _resolve_fallback_form_and_contact(cur_form, cur_owner, cur_sales):
+        raw_source_text = cur_form or ""
+        if shopify_product:
+            raw_source_text += "\n" + str(shopify_product.get("descriptionHtml") or "")
+        if blogger_post:
+            raw_source_text += "\n" + str(blogger_post.get("content") or "")
+
+        if not cur_owner and raw_source_text:
+            m_o = re.search(r'(?:^|\n|<br\s*/?>)\s*(?:Nama|Owner)\s*:\s*([^<\n\r]+)', raw_source_text, re.IGNORECASE)
+            if m_o:
+                cur_owner = m_o.group(1).strip()
+        if not cur_sales and raw_source_text:
+            m_s = re.search(r'(?:^|\n|<br\s*/?>)\s*(?:Order\s+received\s+by|Sales)\s*:\s*([^<\n\r]+)', raw_source_text, re.IGNORECASE)
+            if m_s:
+                cur_sales = m_s.group(1).strip()
+
+        if not cur_form:
+            if shopify_product:
+                try:
+                    cur_form = extract_description_from_shopify_html(
+                        shopify_product.get("descriptionHtml", ""),
+                        title=shopify_product.get("title", "")
+                    )
+                except Exception:
+                    pass
+            if not cur_form and blogger_post:
+                try:
+                    cur_form = extract_takedown_description_from_post(blogger_post)
+                except Exception:
+                    pass
+
+        return cur_form, cur_owner, cur_sales
+
     # 1. Jika terindikasi Consignment PO atau berawalan CPO
     if is_consign_po or sku.upper().startswith("CPO"):
+        sheet_info = "PHOTO OWNER"
         try:
             res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO OWNER", "sku": canonical_sku}, timeout=15)
             if res.status_code == 200:
@@ -1349,14 +1384,17 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
                 if data.get("status") == "success" and data.get("row"):
                     sheet_info = f"{data.get('tab_name', 'PHOTO OWNER')} (Baris {data.get('row')})"
                     form_content = (data.get("form") or "").strip()
-                    return (sheet_info, form_content, "", "") if return_form else sheet_info
+                    owner = (data.get("owner") or "").strip()
+                    sales = (data.get("sales") or "").strip()
         except Exception as e:
             print(f"⚠️ Error query consignment PO sheet: {e}")
-        sheet_info = "PHOTO OWNER"
-        return (sheet_info, form_content, "", "") if return_form else sheet_info
+
+        form_content, owner, sales = _resolve_fallback_form_and_contact(form_content, owner, sales)
+        return (sheet_info, form_content, owner, sales) if return_form else sheet_info
 
     # 2. Jika terindikasi Consignment PS
     if is_consign_ps:
+        sheet_info = "PHOTO STUDIO"
         try:
             res = requests.post(APPS_SCRIPT_CONSIGNMENT_URL, json={"action": "query_sku", "sheet_name": "PHOTO STUDIO", "sku": canonical_sku}, timeout=15)
             if res.status_code == 200:
@@ -1366,18 +1404,10 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
                     form_content = (data.get("form") or "").strip()
                     owner = (data.get("owner") or "").strip()
                     sales = (data.get("sales") or "").strip()
-                    if not owner and form_content:
-                        m_owner = re.search(r'(?:^|\n)\s*Nama\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
-                        if m_owner:
-                            owner = m_owner.group(1).strip()
-                    if not sales and form_content:
-                        m_sales = re.search(r'(?:^|\n)\s*Order\s+received\s+by\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
-                        if m_sales:
-                            sales = m_sales.group(1).strip()
-                    return (sheet_info, form_content, owner, sales) if return_form else sheet_info
         except Exception as e:
             print(f"⚠️ Error query consignment PS sheet: {e}")
-        sheet_info = "PHOTO STUDIO"
+
+        form_content, owner, sales = _resolve_fallback_form_and_contact(form_content, owner, sales)
         return (sheet_info, form_content, owner, sales) if return_form else sheet_info
 
     # 3. Default atau FEATURED: Cek Spreadsheet Slow Moving (Tab ALL STOCK)
@@ -1388,6 +1418,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
             if data.get("status") == "success" and data.get("row"):
                 sheet_info = f"{data.get('tab_name', 'ALL STOCK')} (Baris {data.get('row')})"
                 owner = (data.get("owner") or "").strip()
+                form_content, owner, sales = _resolve_fallback_form_and_contact(form_content, owner, sales)
                 return (sheet_info, form_content, owner, "") if return_form else sheet_info
     except Exception as e:
         print(f"⚠️ Error query slow moving sheet: {e}")
@@ -1402,14 +1433,7 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
                 form_content = (data_alt.get("form") or "").strip()
                 owner = (data_alt.get("owner") or "").strip()
                 sales = (data_alt.get("sales") or "").strip()
-                if not owner and form_content:
-                    m_owner = re.search(r'(?:^|\n)\s*Nama\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
-                    if m_owner:
-                        owner = m_owner.group(1).strip()
-                if not sales and form_content:
-                    m_sales = re.search(r'(?:^|\n)\s*Order\s+received\s+by\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
-                    if m_sales:
-                        sales = m_sales.group(1).strip()
+                form_content, owner, sales = _resolve_fallback_form_and_contact(form_content, owner, sales)
                 return (sheet_info, form_content, owner, sales) if return_form else sheet_info
     except Exception:
         pass
@@ -1422,10 +1446,14 @@ def resolve_watch_spreadsheet_location(sku, blogger_post=None, return_form=False
             if data_alt_po.get("status") == "success" and data_alt_po.get("row"):
                 sheet_info = f"{data_alt_po.get('tab_name', 'PHOTO OWNER')} (Baris {data_alt_po.get('row')})"
                 form_content = (data_alt_po.get("form") or "").strip()
-                return (sheet_info, form_content, "", "") if return_form else sheet_info
+                owner = (data_alt_po.get("owner") or "").strip()
+                sales = (data_alt_po.get("sales") or "").strip()
+                form_content, owner, sales = _resolve_fallback_form_and_contact(form_content, owner, sales)
+                return (sheet_info, form_content, owner, sales) if return_form else sheet_info
     except Exception:
         pass
 
+    form_content, owner, sales = _resolve_fallback_form_and_contact(form_content, owner, sales)
     return (sheet_info, form_content, owner, sales) if return_form else sheet_info
 
 def parse_repost_chat(message_text):
@@ -1971,14 +1999,25 @@ def extract_takedown_description_from_post(post):
     if not content:
         return post.get("title", "")
 
-    soup = BeautifulSoup(content, "html.parser")
-    for br in soup.find_all("br"):
-        br.replace_with("\n")
-    for tag in soup.find_all(["div", "p", "li", "ul", "h1", "h2", "h3", "h4", "hr", "table", "tr"]):
-        tag.insert_before("\n")
-        tag.insert_after("\n")
+    raw_text = ""
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        for br in soup.find_all("br"):
+            br.replace_with("\n")
+        for tag in soup.find_all(["div", "p", "li", "ul", "h1", "h2", "h3", "h4", "hr", "table", "tr"]):
+            tag.insert_before("\n")
+            tag.insert_after("\n")
 
-    raw_lines = [re.sub(r'[\xa0\s]+', ' ', line.strip()).strip() for line in soup.get_text().split("\n") if line.strip()]
+        raw_text = soup.get_text()
+    except Exception:
+        pass
+
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raw_text = re.sub(r'<br\s*/?>', '\n', content, flags=re.IGNORECASE)
+        raw_text = re.sub(r'</?(?:div|p|li|ul|h[1-6]|hr|table|tr)[^>]*>', '\n', raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r'<[^>]+>', '', raw_text)
+
+    raw_lines = [re.sub(r'[\xa0\s]+', ' ', line.strip()).strip() for line in raw_text.split("\n") if line.strip()]
 
     stop_patterns = [
         r'^assets?\b',
@@ -2016,14 +2055,25 @@ def extract_description_from_shopify_html(desc_html, title=""):
         return title or ""
 
     clean_html = re.sub(r'<!--.*?-->', '', desc_html, flags=re.DOTALL)
-    soup = BeautifulSoup(clean_html, "html.parser")
-    for br in soup.find_all("br"):
-        br.replace_with("\n")
-    for tag in soup.find_all(["div", "p", "li", "ul", "h1", "h2", "h3", "h4", "hr", "table", "tr"]):
-        tag.insert_before("\n")
-        tag.insert_after("\n")
+    raw_text = ""
+    try:
+        soup = BeautifulSoup(clean_html, "html.parser")
+        for br in soup.find_all("br"):
+            br.replace_with("\n")
+        for tag in soup.find_all(["div", "p", "li", "ul", "h1", "h2", "h3", "h4", "hr", "table", "tr"]):
+            tag.insert_before("\n")
+            tag.insert_after("\n")
 
-    raw_lines = [re.sub(r'[\xa0\s]+', ' ', line.strip()).strip() for line in soup.get_text().split("\n") if line.strip()]
+        raw_text = soup.get_text()
+    except Exception:
+        pass
+
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raw_text = re.sub(r'<br\s*/?>', '\n', clean_html, flags=re.IGNORECASE)
+        raw_text = re.sub(r'</?(?:div|p|li|ul|h[1-6]|hr|table|tr)[^>]*>', '\n', raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r'<[^>]+>', '', raw_text)
+
+    raw_lines = [re.sub(r'[\xa0\s]+', ' ', line.strip()).strip() for line in raw_text.split("\n") if line.strip()]
 
     stop_patterns = [
         r'^assets?\b',
@@ -3678,7 +3728,12 @@ def wa_webhook():
             post = find_blogger_post_by_code(service, matched_sku) if service else None
 
             # Tentukan lokasi spreadsheet (Tab & Nomor Baris), form konsinyasi, dan owner/sales jika ada
-            sheet_res = resolve_watch_spreadsheet_location(matched_sku, blogger_post=post, return_form=True)
+            sheet_res = resolve_watch_spreadsheet_location(
+                matched_sku,
+                blogger_post=post,
+                return_form=True,
+                shopify_product=shopify_match.get("product_node")
+            )
             if isinstance(sheet_res, (tuple, list)):
                 if len(sheet_res) >= 4:
                     sheet_info, form_content, owner, sales = sheet_res[0], sheet_res[1], sheet_res[2], sheet_res[3]
@@ -3699,6 +3754,27 @@ def wa_webhook():
                 form_content = ""
                 owner = ""
                 sales = ""
+
+            # Pengamanan tambahan: jika form_content masih kosong, ambil dari Shopify atau Blogger
+            if not form_content:
+                if shopify_match.get("product_node"):
+                    form_content = extract_description_from_shopify_html(
+                        shopify_match["product_node"].get("descriptionHtml", ""),
+                        title=matched_title
+                    )
+                if not form_content and post:
+                    form_content = extract_takedown_description_from_post(post)
+
+            # Ekstrak owner/sales dari form_content jika belum terisi
+            if form_content:
+                if not owner:
+                    m_owner = re.search(r'(?:^|\n)\s*(?:Nama|Owner)\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
+                    if m_owner:
+                        owner = m_owner.group(1).strip()
+                if not sales:
+                    m_sales = re.search(r'(?:^|\n)\s*(?:Order\s+received\s+by|Sales)\s*:\s*([^\n\r]+)', form_content, re.IGNORECASE)
+                    if m_sales:
+                        sales = m_sales.group(1).strip()
 
             # Simpan ke sesi jam tangan aktif bersama (disk & memori)
             session_data = {
