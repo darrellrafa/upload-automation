@@ -231,10 +231,11 @@ class TestWatchIdentificationAndQuickReplies(unittest.TestCase):
             self.assertIn("Ref. 126234", form)
             self.assertEqual(owner, "Budi")
 
-            # Verifikasi payload mengandung require_available=True dan filter_status='Available'
+            # Verifikasi payload dikirim tanpa pembatasan status agar status Reprice / Repost tidak dilewati
             call_args = mock_post.call_args
-            self.assertTrue(call_args[1]["json"].get("require_available"))
-            self.assertEqual(call_args[1]["json"].get("filter_status"), "Available")
+            self.assertEqual(call_args[1]["json"].get("action"), "query_sku")
+            self.assertEqual(call_args[1]["json"].get("sheet_name"), "PHOTO OWNER")
+            self.assertFalse(call_args[1]["json"].get("require_available", False))
 
     def test_resolve_watch_spreadsheet_location_for_photo_owner_fallback_shopify(self):
         from unittest.mock import patch, MagicMock

@@ -42,9 +42,9 @@ function doPost(e) {
 
       var skuQ = (data.sku || "").toString().trim().toLowerCase();
       var baseSkuQ = skuQ.replace(/-\d+$/, '');
-      // Rules: Default harus yang statusnya Available agar tepat sasaran (tidak salah ambil baris yang Sold / Takedown / Hold)
-      var requireAvailable = (data.require_available !== false);
-      var filterStatus = (data.filter_status || data.status || "").toString().trim().toLowerCase();
+      // Tidak mewajibkan status Available agar jika status jam sudah 'reprice' atau 'repost' tetap terdeteksi
+      var requireAvailable = (data.require_available === true);
+      var filterStatus = (data.filter_status || "").toString().trim().toLowerCase();
       var foundRowQ = -1;
       var foundStatusQ = "";
       var foundTabName = "";
@@ -62,7 +62,7 @@ function doPost(e) {
           var statusVal = rawStatus.toLowerCase();
           var isAvailable = (statusVal === "available" || statusVal.indexOf("avail") === 0 || statusVal === "reprice" || statusVal === "repost" || statusVal === "reprice/post" || statusVal === "reprice / post");
 
-          // Filter status: pastikan baris yang dipilih berstatus Available
+          // Filter status hanya jika secara eksplisit diminta
           if (requireAvailable && !isAvailable) {
             continue;
           }
