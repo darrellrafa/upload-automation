@@ -3978,6 +3978,7 @@ def wa_webhook():
                 res_po = update_consignment_po_sheet(canonical_sku, cmd_type, formatted_price, numeric_price)
                 sheet_consign_po_res = res_po
                 if res_po.get("status") == "success":
+                    is_consign_po = True
                     updated_in_sheet = True
 
             # 3c. Update Spreadsheet Slow Moving (jika ada label FEATURED)
@@ -3987,6 +3988,7 @@ def wa_webhook():
                 res_feat = update_slow_moving_sheet(sku, cmd_type, formatted_price, numeric_price, canonical_sku=canonical_sku)
                 sheet_slow_moving_res = res_feat
                 if res_feat.get("status") == "success":
+                    is_featured = True
                     updated_in_sheet = True
 
             # 3d. SMART FALLBACK jika belum terupdate (misal Blogspot tidak memiliki label yang sesuai)
@@ -4048,7 +4050,7 @@ def wa_webhook():
             pesan_konfirmasi += f"{status_shop_icon} *Shopify:* {shopify_res.get('product_title', shopify_res.get('message', 'Sukses'))}\n"
 
             # Bagian Status Spreadsheet
-            if is_consign_ps:
+            if is_consign_ps or sheet_consign_ps_res.get("status") == "success":
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
@@ -4057,7 +4059,7 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
-            if is_consign_po:
+            if is_consign_po or sheet_consign_po_res.get("status") == "success":
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
@@ -4066,7 +4068,7 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
-            if is_featured:
+            if is_featured or sheet_slow_moving_res.get("status") == "success":
                 status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_slow_icon} *Spreadsheet (Slow Moving):* "
                 if sheet_slow_moving_res.get("status") == "success":
@@ -4074,7 +4076,10 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
 
-            if not is_consign_ps and not is_consign_po and not is_featured:
+            if (not is_consign_ps and not is_consign_po and not is_featured and
+                sheet_consign_ps_res.get("status") != "success" and
+                sheet_consign_po_res.get("status") != "success" and
+                sheet_slow_moving_res.get("status") != "success"):
                 pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / CONSIGNMENT_PO / FEATURED)\n"
 
             kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())
@@ -4164,6 +4169,7 @@ def wa_webhook():
                 res_ps = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO STUDIO")
                 sheet_consign_ps_res = res_ps
                 if res_ps.get("status") == "success":
+                    is_consign_ps = True
                     updated_in_sheet = True
 
             elif is_consign_po or sku.upper().startswith("CPO"):
@@ -4171,6 +4177,7 @@ def wa_webhook():
                 res_po = update_consignment_status_sheet(canonical_sku, status_text, sheet_name="PHOTO OWNER")
                 sheet_consign_po_res = res_po
                 if res_po.get("status") == "success":
+                    is_consign_po = True
                     updated_in_sheet = True
 
             if is_featured:
@@ -4178,6 +4185,7 @@ def wa_webhook():
                 res_feat = update_slow_moving_status_sheet(sku, status_text, canonical_sku=canonical_sku)
                 sheet_slow_moving_res = res_feat
                 if res_feat.get("status") == "success":
+                    is_featured = True
                     updated_in_sheet = True
 
             # Prioritas 2 (SMART FALLBACK): Jika belum berhasil diperbarui di spreadsheet manapun
@@ -4260,14 +4268,14 @@ def wa_webhook():
                     pesan_konfirmasi += f"ℹ️ *Blogspot:* {blogger_res.get('message', 'Postingan tidak ditemukan / sudah tidak aktif')}\n"
 
             # Status Spreadsheet Consignment & Slow Moving
-            if is_consign_ps:
+            if is_consign_ps or sheet_consign_ps_res.get("status") == "success":
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
                     pesan_konfirmasi += f"Status diubah ke *{status_text}* (Baris {sheet_consign_ps_res.get('row', '-')}, Tab PHOTO STUDIO)\n"
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
-            elif is_consign_po:
+            elif is_consign_po or sheet_consign_po_res.get("status") == "success":
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
@@ -4275,7 +4283,7 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_consign_po_res.get('message', 'Gagal')}\n"
 
-            if is_featured:
+            if is_featured or sheet_slow_moving_res.get("status") == "success":
                 status_slow_icon = "✅" if sheet_slow_moving_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_slow_icon} *Spreadsheet (Slow Moving):* "
                 if sheet_slow_moving_res.get("status") == "success":
@@ -4283,7 +4291,10 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_slow_moving_res.get('message', 'Gagal')}\n"
 
-            if not is_consign_ps and not is_consign_po and not is_featured:
+            if (not is_consign_ps and not is_consign_po and not is_featured and
+                sheet_consign_ps_res.get("status") != "success" and
+                sheet_consign_po_res.get("status") != "success" and
+                sheet_slow_moving_res.get("status") != "success"):
                 pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (SKU tidak ditemukan di Consignment maupun Slow Moving)\n"
 
             # Resolusi deskripsi lengkap spesifikasi jam tangan (Blogspot / fallback Shopify)
@@ -4365,6 +4376,7 @@ def wa_webhook():
                 res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO STUDIO")
                 sheet_consign_ps_res = res
                 if res.get("status") == "success":
+                    is_consign_ps = True
                     updated_repost = True
 
             elif (is_consign_po or sku.upper().startswith("CPO")) and blogger_res.get("status") == "success":
@@ -4372,6 +4384,7 @@ def wa_webhook():
                 res = update_consignment_repost_sheet(canonical_sku, sheet_name="PHOTO OWNER")
                 sheet_consign_po_res = res
                 if res.get("status") == "success":
+                    is_consign_po = True
                     updated_repost = True
 
             # Smart Fallback jika tidak ada tag spesifik di Blogspot
@@ -4414,7 +4427,7 @@ def wa_webhook():
 
             pesan_konfirmasi += "⏭️ *Shopify:* Dilewati (Tidak ada perubahan untuk REPOST)\n"
 
-            if is_consign_ps:
+            if is_consign_ps or sheet_consign_ps_res.get("status") == "success":
                 status_consign_icon = "✅" if sheet_consign_ps_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_icon} *Spreadsheet (Consignment PS):* "
                 if sheet_consign_ps_res.get("status") == "success":
@@ -4423,7 +4436,7 @@ def wa_webhook():
                 else:
                     pesan_konfirmasi += f"{sheet_consign_ps_res.get('message', 'Gagal')}\n"
 
-            if is_consign_po:
+            if is_consign_po or sheet_consign_po_res.get("status") == "success":
                 status_consign_po_icon = "✅" if sheet_consign_po_res.get("status") == "success" else "⚠️"
                 pesan_konfirmasi += f"{status_consign_po_icon} *Spreadsheet (Consignment PO):* "
                 if sheet_consign_po_res.get("status") == "success":
@@ -4434,7 +4447,9 @@ def wa_webhook():
 
             if is_featured:
                 pesan_konfirmasi += "⏭️ *Spreadsheet (Slow Moving):* Dilewati (Tidak ada perubahan status untuk REPOST)\n"
-            elif not is_consign_ps and not is_consign_po:
+            elif (not is_consign_ps and not is_consign_po and
+                  sheet_consign_ps_res.get("status") != "success" and
+                  sheet_consign_po_res.get("status") != "success"):
                 pesan_konfirmasi += "⏭️ *Spreadsheet:* Dilewati (Bukan tag CONSIGNMENT_PS / CONSIGNMENT_PO)\n"
 
             kirim_balasan_wa(chat_id, pesan_konfirmasi.strip())

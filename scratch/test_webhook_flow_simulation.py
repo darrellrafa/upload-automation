@@ -648,5 +648,73 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("LAPORAN REPRICE", last_wa_msg)
         self.assertIn("5846254/4664620", last_wa_msg)
 
+    @patch("flask_app.kirim_balasan_wa")
+    @patch("flask_app.update_shopify_takedown")
+    @patch("flask_app.get_blogger_service")
+    @patch("flask_app.find_blogger_post_by_code")
+    @patch("flask_app.update_consignment_status_sheet")
+    def test_transition_from_on_hold_to_sold_for_cpo_product(
+        self, mock_sheet_status, mock_find_post, mock_get_blog, mock_shop_td, mock_kirim_wa
+    ):
+        chat_id = "test-group@g.us"
+        sku = "CPO-091126-01"
+        ACTIVE_IDENTIFIED_WATCHES.clear()
+
+        # Blogspot post sudah di-trash sebelumnya saat on hold (sehingga find_post mengembalikan None)
+        mock_get_blog.return_value = MagicMock()
+        mock_find_post.return_value = None
+
+        mock_shop_td.return_value = {
+            "status": "success",
+            "product_title": "PANTHÈRE S SILVER DIAL (2025)",
+            "matched_sku": sku,
+            "product_node": {
+                "title": "PANTHÈRE S SILVER DIAL (2025)",
+                "descriptionHtml": (
+                    "CARTIER PANTHÈRE S SILVER DIAL<br>"
+                    "Ref. WSPN0006<br>"
+                    "Size 23mm x 30mm, Quartz Movement<br>"
+                    "Box & Paper<br>"
+                    "Warranty Until 2033<br>"
+                    "Very Mint Condition"
+                )
+            }
+        }
+        mock_sheet_status.return_value = {
+            "status": "success",
+            "row": 1662,
+            "tab_name": "PHOTO OWNER"
+        }
+
+        sold_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-sold-cpo-transition",
+            "senderData": {"chatId": chat_id, "senderName": "Dylan Baru"},
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {"textMessage": f"sold {sku}"}
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=sold_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("command"), "SOLD")
+        self.assertEqual(res.get("sku"), sku)
+        self.assertEqual(res["spreadsheet_consignment_po"]["status"], "success")
+        self.assertEqual(res["spreadsheet_consignment_po"]["row"], 1662)
+
+        # Verifikasi teks pesan WhatsApp
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertIn("🏷️ *LAPORAN SOLD IDWX*", last_wa_msg)
+        self.assertIn("CPO-091126-01", last_wa_msg)
+        self.assertIn("✅ *Shopify:* PANTHÈRE S SILVER DIAL (2025)", last_wa_msg)
+        self.assertIn("✅ *Blogspot:* Sudah di Sampah (Trash) sebelumnya", last_wa_msg)
+        self.assertIn("✅ *Spreadsheet (Consignment PO):* Status diubah ke *Sold* (Baris 1662, Tab PHOTO OWNER)", last_wa_msg)
+        self.assertNotIn("Spreadsheet:* Dilewati", last_wa_msg)
+        self.assertIn("CARTIER PANTHÈRE S SILVER DIAL", last_wa_msg)
+        self.assertIn("Ref. WSPN0006", last_wa_msg)
+
 if __name__ == "__main__":
     unittest.main()
