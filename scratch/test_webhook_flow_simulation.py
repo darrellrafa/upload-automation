@@ -597,5 +597,56 @@ class TestWebhookFlowSimulation(unittest.TestCase):
         self.assertIn("Baris 2515, Tab PHOTO STUDIO", last_wa_msg)
         self.assertNotIn("Spreadsheet:* Dilewati", last_wa_msg)
 
+    @patch("flask_app.kirim_balasan_wa")
+    @patch("flask_app.update_consignment_sheet")
+    @patch("flask_app.update_blogger_reprice")
+    @patch("flask_app.update_shopify_reprice")
+    @patch("flask_app.get_blogger_service")
+    @patch("flask_app.find_blogger_post_by_code")
+    def test_reprice_with_explicit_sku_without_active_session(
+        self, mock_find_post, mock_get_blog, mock_shop_price, mock_blog_price, mock_sheet_reprice, mock_kirim_wa
+    ):
+        chat_id = "test-group@g.us"
+        ACTIVE_IDENTIFIED_WATCHES.clear()
+
+        mock_get_blog.return_value = MagicMock()
+        mock_find_post.return_value = {
+            "id": "post-reprice-584",
+            "title": "[FOR SALE] PATEK PHILIPPE NAUTILUS (2020)",
+            "labels": ["CONSIGNMENT_PS"],
+            "content": "Price: Rp 2,200,000,000Code: 5846254/4664620"
+        }
+        mock_shop_price.return_value = {"status": "success", "title": "PATEK PHILIPPE NAUTILUS (2020)"}
+        mock_blog_price.return_value = {"status": "success"}
+        mock_sheet_reprice.return_value = {"status": "success", "row": 1500, "tab_name": "PHOTO STUDIO"}
+
+        # User mengirim perintah langsung dengan SKU (tanpa sesi aktif, baris baru antar SKU dan harga)
+        reprice_payload = {
+            "typeWebhook": "incomingMessageReceived",
+            "idMessage": "msg-reprice-direct",
+            "senderData": {"chatId": chat_id, "senderName": "Dylan Baru"},
+            "messageData": {
+                "typeMessage": "textMessage",
+                "textMessageData": {
+                    "textMessage": "reprice 5846254/4664620\n2,068,000,000"
+                }
+            }
+        }
+        flask_app.request.get_json = MagicMock(return_value=reprice_payload)
+
+        res, code = wa_webhook()
+        self.assertEqual(code, 200)
+        self.assertEqual(res.get("command"), "REPRICE")
+        self.assertEqual(res.get("sku"), "5846254/4664620")
+        self.assertEqual(res.get("numeric_price"), 2068000000.0)
+        self.assertEqual(res.get("formatted_price"), "Rp 2,068,000,000")
+
+        # Pastikan tidak ada balasan pesan "Tidak ada sesi identifikasi jam tangan yang aktif"
+        mock_kirim_wa.assert_called()
+        last_wa_msg = mock_kirim_wa.call_args[0][1]
+        self.assertNotIn("Tidak ada sesi identifikasi", last_wa_msg)
+        self.assertIn("LAPORAN REPRICE", last_wa_msg)
+        self.assertIn("5846254/4664620", last_wa_msg)
+
 if __name__ == "__main__":
     unittest.main()

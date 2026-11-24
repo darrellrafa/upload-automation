@@ -520,25 +520,27 @@ def parse_reprice_chat(message_text, fallback_sku=None):
                     }
 
     # Cara 3: Dukung format tanpa garis miring: misal 'REPRICE abcd123 150JT' atau 'HARGA BARU abcd123 Rp 150.000.000'
-    m_no_slash = re.match(r'^(REPRICE|HARGA\s+BARU)\s+([A-Za-z0-9\-\/]+)\s+(.+)$', message_text.strip(), re.IGNORECASE)
+    m_no_slash = re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)\s+([A-Za-z0-9\-\/]+)\s+(.+)$', message_text.strip(), re.IGNORECASE | re.DOTALL)
     if m_no_slash:
         cmd_raw = m_no_slash.group(1).upper()
         code_raw = m_no_slash.group(2).strip()
         price_raw = m_no_slash.group(3).strip()
-        num_price = parse_price(price_raw)
-        if num_price > 0:
-            c_type = "REPRICE" if "REPRICE" in cmd_raw else "HARGA_BARU"
-            return {
-                "command_type": c_type,
-                "code": clean_sku_string(code_raw).upper(),
-                "raw_price": price_raw,
-                "numeric_price": num_price,
-                "formatted_price": format_rupiah(num_price)
-            }
+        clean_code = clean_sku_string(code_raw).upper()
+        if clean_code not in ["RP", "IDR", "/"]:
+            num_price = parse_price(price_raw)
+            if num_price > 0:
+                c_type = "REPRICE" if "REPRICE" in cmd_raw else "HARGA_BARU"
+                return {
+                    "command_type": c_type,
+                    "code": clean_code,
+                    "raw_price": price_raw,
+                    "numeric_price": num_price,
+                    "formatted_price": format_rupiah(num_price)
+                }
 
-    # Cara 4: Format Cepat jika menggunakan fallback_sku (misal balasan chat: 'REPRICE 650JT' atau 'REPRICE / 650JT')
+    # Cara 4: Format Cepat jika menggunakan fallback_sku (misal balasan chat: 'REPRICE 650JT' atau 'REPRICE / 650JT' atau 'REPRICE Rp 650.000.000')
     if fallback_sku:
-        m_fallback = re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', message_text.strip(), re.IGNORECASE)
+        m_fallback = re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', message_text.strip(), re.IGNORECASE | re.DOTALL)
         if m_fallback:
             cmd_raw = m_fallback.group(1).upper()
             price_raw = m_fallback.group(2).strip().lstrip('/:- \t')
@@ -3849,11 +3851,17 @@ def wa_webhook():
             if active_sess:
                 fallback_sku = active_sess.get("sku")
 
-        # Cek apakah user mengirim perintah aksi cepat tanpa SKU saat sesi sudah kedaluwarsa atau tidak ada
-        is_bare_action = (
-            caption.lower().strip() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"]
-            or bool(re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', caption.strip(), re.IGNORECASE))
-        )
+        # Cek apakah pesan merupakan perintah lengkap dengan SKU yang eksplisit
+        explicit_reprice_cmd = parse_reprice_chat(caption, fallback_sku=None)
+        explicit_takedown_cmd = parse_takedown_chat(caption, fallback_sku=None)
+        explicit_repost_cmd = parse_repost_chat(caption)
+        has_explicit_sku = bool(explicit_reprice_cmd or explicit_takedown_cmd or explicit_repost_cmd)
+
+        # Cek apakah user mengirim perintah aksi cepat tanpa SKU (memerlukan sesi identifikasi aktif / quote)
+        is_bare_reprice = (not has_explicit_sku) and bool(parse_reprice_chat(caption, fallback_sku="DUMMY_FALLBACK"))
+        is_bare_takedown = (not has_explicit_sku) and (caption.lower().strip() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"])
+        is_bare_action = is_bare_reprice or is_bare_takedown
+
         if is_bare_action and not fallback_sku and not (type_msg == "imageMessage" and image_url):
             if expired_sess:
                 title_exp = expired_sess.get("title", "produk")
@@ -3877,10 +3885,10 @@ def wa_webhook():
                 return jsonify({"status": "ignored", "reason": "No active session for bare action"}), 200
 
         # Jika user mengirim foto dengan caption aksi langsung tanpa mengetik SKU (misal: foto + "sold", foto + "reprice 650jt"):
-        if type_msg == "imageMessage" and image_url and not fallback_sku and not is_chat_excluded_from_identification(chat_id):
-            is_action_caption = (
+        if type_msg == "imageMessage" and image_url and not fallback_sku and not has_explicit_sku and not is_chat_excluded_from_identification(chat_id):
+            is_action_caption = is_bare_action or bool(
                 caption.lower().strip() in ["sold", "laku", "on hold", "onhold", "hold", "takedown"]
-                or re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', caption.strip(), re.IGNORECASE)
+                or re.match(r'^(REPRICE|HARGA\s+BARU|HARGA_BARU)(?:\s*/\s*|\s+)(.+)$', caption.strip(), re.IGNORECASE | re.DOTALL)
             )
             if is_action_caption:
                 print(f"📸 Menerima foto dengan caption aksi '{caption}' dari: {sender_name}. Menjalankan identifikasi Gemini Vision...")
@@ -4074,6 +4082,8 @@ def wa_webhook():
                 "status": "success",
                 "command": cmd_type,
                 "sku": sku,
+                "numeric_price": numeric_price,
+                "formatted_price": formatted_price,
                 "blogger": blogger_res,
                 "shopify": shopify_res,
                 "spreadsheet_consignment_ps": sheet_consign_ps_res,
